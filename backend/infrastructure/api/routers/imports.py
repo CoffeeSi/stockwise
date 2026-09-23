@@ -15,7 +15,7 @@ from backend.infrastructure.api.errors import ERROR_RESPONSES, invoke, safe_issu
 from backend.infrastructure.api.schemas.imports import ImportResponse, ImportStatusResponse
 
 router = APIRouter(prefix="/api/imports", tags=["imports"],
-                   dependencies=[Depends(deps.get_current_user)], responses=ERROR_RESPONSES)
+                   dependencies=[Depends(deps.get_audit_actor)], responses=ERROR_RESPONSES)
 
 
 @router.get("/{batch_id}", response_model=ImportStatusResponse)
@@ -31,7 +31,7 @@ def get_import_status(batch_id: UUID, use_case: GetImportStatus = Depends(deps.g
 
 @router.post("", response_model=ImportResponse, status_code=201)
 def import_file(source_type: Annotated[ImportSourceType, Form()], file: Annotated[UploadFile, File()],
-                user: User = Depends(deps.require_writer), use_case: ImportData = Depends(deps.get_import_data)):
+                user: User = Depends(deps.get_audit_actor), use_case: ImportData = Depends(deps.get_import_data)):
     try:
         name = PureWindowsPath(file.filename or "").name.strip()
         if not name.lower().endswith(".xlsx") or len(name) > 500 or (file.size or 0) > MAX_IMPORT_FILE_SIZE:

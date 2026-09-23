@@ -2,6 +2,14 @@ import { z } from "zod";
 import { apiDateTimeSchema, apiDecimalSchema, apiUuidSchema } from "@/shared/api";
 
 export const calculationRunStatusSchema = z.enum(["pending", "running", "completed", "failed"]);
+export const demandTrendPointSchema = z.object({
+  category_id: apiUuidSchema.nullable(),
+  period_start: z.iso.date(),
+  period_end: z.iso.date(),
+  raw_demand: apiDecimalSchema,
+  cleaned_demand: apiDecimalSchema,
+  stockout_adjustment: apiDecimalSchema,
+});
 export const demandSourceSchema = z.enum(["transactions", "monthly_sales"]);
 export const createCalculationRunInputSchema = z.strictObject({
   demand_source: demandSourceSchema,
@@ -104,6 +112,7 @@ export const runRecommendationsPageSchema = z.object({
 });
 
 export type CalculationRun = z.infer<typeof calculationRunSchema>;
+export type DemandTrendPoint = z.infer<typeof demandTrendPointSchema>;
 export type CreateCalculationRunInput = z.infer<typeof createCalculationRunInputSchema>;
 export type RunRecommendationFilters = z.infer<typeof runRecommendationFiltersSchema>;
 export type RunRecommendation = z.infer<typeof runRecommendationSchema>;

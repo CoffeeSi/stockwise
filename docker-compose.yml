@@ -32,7 +32,6 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-procurement}}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
-      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET to a random 32+ byte secret in .env}
       JWT_ACCESS_MINUTES: ${JWT_ACCESS_MINUTES:-30}
       DB_MAX_RETRIES: ${DB_MAX_RETRIES:-30}
       DB_RETRY_INTERVAL: ${DB_RETRY_INTERVAL:-2}

@@ -3,8 +3,7 @@
 import type { ReactNode } from "react";
 import { QueryProvider } from "./query-provider";
 import { ThemeProvider } from "./theme-provider";
-import { SessionGate } from "@/features/auth-session";
 
 export function AppProvider({ children }: { children: ReactNode }) {
-  return <ThemeProvider><QueryProvider><SessionGate>{children}</SessionGate></QueryProvider></ThemeProvider>;
+  return <ThemeProvider><QueryProvider>{children}</QueryProvider></ThemeProvider>;
 }

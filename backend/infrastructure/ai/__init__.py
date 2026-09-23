@@ -1,4 +1,4 @@
-"""AI Integration layer using OpenAI API with Structured Outputs, caching and fallbacks."""
+"""AI integration using OpenAI API with Structured Outputs and caching."""
 
 from backend.infrastructure.ai.schemas import (
     SkuAnalysisRequest,

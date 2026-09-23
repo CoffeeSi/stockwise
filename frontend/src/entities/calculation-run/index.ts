@@ -2,12 +2,14 @@ export {
   calculationRunStatusSchema,
   demandSourceSchema,
   calculationRunSchema,
+  demandTrendPointSchema,
   createCalculationRunInputSchema,
   runRecommendationFiltersSchema,
   runRecommendationsPageSchema,
 } from "./model/schema";
 export type {
   CalculationRun,
+  DemandTrendPoint,
   CreateCalculationRunInput,
   RunRecommendationFilters,
   RunRecommendation,
@@ -16,6 +18,7 @@ export type {
 export {
   calculationRunKeys,
   calculationRunQueryOptions,
+  demandTrendsQueryOptions,
   runRecommendationsQueryOptions,
   createCalculationRun,
 } from "./api/calculation-run";

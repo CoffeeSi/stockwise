@@ -19,11 +19,11 @@ from backend.infrastructure.api.schemas.workflows import (
 )
 
 router = APIRouter(prefix="/api/calculation-runs", tags=["calculations"],
-                   dependencies=[Depends(deps.get_current_user)], responses=ERROR_RESPONSES)
+                   dependencies=[Depends(deps.get_audit_actor)], responses=ERROR_RESPONSES)
 
 
 @router.post("", response_model=CalculationRunResponse, status_code=201)
-def run_calculation(body: RunCalculationRequest, user: User = Depends(deps.require_writer),
+def run_calculation(body: RunCalculationRequest, user: User = Depends(deps.get_audit_actor),
                     use_case: RunCalculation = Depends(deps.get_run_calculation)):
     result = invoke(use_case.execute, RunCalculationCommand(user_id=user.id, **body.model_dump()))
     response = CalculationRunResponse.model_validate(result)
