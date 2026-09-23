@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from backend.application.ports.unit_of_work import Repository
 from backend.domain.repositories.import_repository import ImportRepository
+from backend.domain.repositories.background_job_repository import BackgroundJobRepository
 from backend.domain.repositories.calculation_run_repository import CalculationRunRepository
 from backend.domain.repositories.inventory_repository import InventoryRepository
 from backend.domain.repositories.material_requirement_repository import MaterialRequirementRepository
@@ -37,6 +38,7 @@ class RepositoryFactories:
     seasonality: RepositoryFactory | None = None
     material_requirements: RepositoryFactory | None = None
     warehouses: Callable[[Session], WarehouseRepository] | None = None
+    jobs: Callable[[Session], BackgroundJobRepository] | None = None
 
     def as_dict(self) -> dict[str, RepositoryFactory]:
         factories = {
@@ -48,7 +50,7 @@ class RepositoryFactories:
             "recommendations": self.recommendations,
             "orders": self.orders,
         }
-        for name in ("products", "seasonality", "material_requirements", "warehouses"):
+        for name in ("products", "seasonality", "material_requirements", "warehouses", "jobs"):
             factory = getattr(self, name)
             if factory is not None:
                 factories[name] = factory
@@ -67,6 +69,10 @@ class SqlAlchemyUnitOfWork:
         self._repository_factories = repository_factories
         self._session: Session | None = None
         self._repositories: dict[str, Repository] = {}
+
+    @property
+    def jobs(self) -> BackgroundJobRepository:
+        return cast(BackgroundJobRepository, self._repository("jobs"))
 
     @property
     def imports(self) -> ImportRepository:

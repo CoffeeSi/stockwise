@@ -3,6 +3,7 @@ from types import TracebackType
 from typing import Protocol, Self
 
 from backend.domain.repositories.import_repository import ImportRepository
+from backend.domain.repositories.background_job_repository import BackgroundJobRepository
 from backend.domain.repositories.calculation_run_repository import CalculationRunRepository
 from backend.domain.repositories.inventory_repository import InventoryRepository
 from backend.domain.repositories.material_requirement_repository import MaterialRequirementRepository
@@ -21,6 +22,9 @@ class Repository(Protocol):
 
 class UnitOfWork(Protocol):
     """Application transaction boundary; contains no SQLAlchemy dependency."""
+
+    @property
+    def jobs(self) -> BackgroundJobRepository: ...
 
     @property
     def imports(self) -> ImportRepository: ...

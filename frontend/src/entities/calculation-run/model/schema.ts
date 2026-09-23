@@ -11,11 +11,15 @@ export const demandTrendPointSchema = z.object({
   stockout_adjustment: apiDecimalSchema,
 });
 export const demandSourceSchema = z.enum(["transactions", "monthly_sales"]);
+const positiveDecimalText = z.string().regex(/^\d+(?:\.\d{1,4})?$/, "Укажите положительную сумму с точностью до 4 знаков.")
+  .refine((value) => Number.isFinite(Number(value)) && Number(value) > 0, "Сумма должна быть больше нуля.");
 export const createCalculationRunInputSchema = z.strictObject({
   demand_source: demandSourceSchema,
   horizon_days: z.number().int().positive(),
   warehouse_id: apiUuidSchema.nullable().optional(),
   category_id: apiUuidSchema.nullable().optional(),
+  budget_limit: positiveDecimalText.nullable().optional(),
+  currency: z.string().regex(/^[A-Z]{3}$/).nullable().optional(),
 });
 export const calculationRunSchema = z.object({
   id: apiUuidSchema,
@@ -25,6 +29,11 @@ export const calculationRunSchema = z.object({
     demand_source: demandSourceSchema.nullable().optional(),
     warehouse_id: apiUuidSchema.nullable().optional(),
     category_id: apiUuidSchema.nullable().optional(),
+    budget_limit: apiDecimalSchema.nullable().optional(),
+    allocated_amount: apiDecimalSchema.nullable().optional(),
+    unmet_need_amount: apiDecimalSchema.nullable().optional(),
+    currency: z.string().nullable().optional(),
+    optimization_method: z.string().nullable().optional(),
   }),
   started_at: apiDateTimeSchema,
   finished_at: apiDateTimeSchema.nullable(),
@@ -32,9 +41,30 @@ export const calculationRunSchema = z.object({
   import_batch_ids: z.array(apiUuidSchema),
   recommendation_count: z.number().int().nonnegative().nullable(),
   error_details: z.record(z.string(), z.string()).nullable(),
+  budget_limit: apiDecimalSchema.nullable().optional(),
+  allocated_amount: apiDecimalSchema.nullable().optional(),
+  unmet_need_amount: apiDecimalSchema.nullable().optional(),
+  currency: z.string().nullable().optional(),
+  optimization_method: z.string().nullable().optional(),
+  progress: z.object({ phase: z.string(), completed: z.number().int().nonnegative(), total: z.number().int().nonnegative() }).nullable().optional(),
+});
+
+export const calculationRunFiltersSchema = z.strictObject({
+  status: calculationRunStatusSchema.optional(),
+  warehouse_id: apiUuidSchema.optional(),
+  category_id: apiUuidSchema.optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+  offset: z.number().int().nonnegative().optional(),
+});
+export const calculationRunPageSchema = z.object({
+  items: z.array(calculationRunSchema),
+  total: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+  offset: z.number().int().nonnegative(),
 });
 
 export const runRecommendationFiltersSchema = z.strictObject({
+  search: z.string().trim().max(120).optional(),
   supplier_id: apiUuidSchema.nullable().optional(),
   warehouse_id: apiUuidSchema.nullable().optional(),
   category_id: apiUuidSchema.nullable().optional(),
@@ -48,6 +78,7 @@ export const runRecommendationFiltersSchema = z.strictObject({
 
 // The calculation-run slice owns this DTO copy because sibling entity imports are disallowed by FSD.
 const runCalculationComponentsSchema = z.object({
+  budget_allocation: z.object({ method: z.string(), unconstrained_quantity: apiDecimalSchema, allocated_quantity: apiDecimalSchema }).nullable().optional(),
   baseline: apiDecimalSchema.nullable().optional(),
   raw_demand: apiDecimalSchema.nullable().optional(),
   return_adjustment: apiDecimalSchema.nullable().optional(),
@@ -83,6 +114,16 @@ const runRecommendationSchema = z.object({
   product_id: apiUuidSchema,
   warehouse_id: apiUuidSchema,
   supplier_id: apiUuidSchema,
+  sku: z.string(),
+  product_name: z.string(),
+  unit: z.string(),
+  supplier_name: z.string(),
+  warehouse_name: z.string(),
+  category_id: apiUuidSchema.nullable(),
+  category_name: z.string().nullable(),
+  unit_price: apiDecimalSchema.nullable(),
+  currency: z.string().nullable(),
+  estimated_total: apiDecimalSchema.nullable(),
   forecast_quantity: apiDecimalSchema,
   current_stock: apiDecimalSchema,
   in_transit_quantity: apiDecimalSchema,
@@ -112,6 +153,7 @@ export const runRecommendationsPageSchema = z.object({
 });
 
 export type CalculationRun = z.infer<typeof calculationRunSchema>;
+export type CalculationRunFilters = z.infer<typeof calculationRunFiltersSchema>;
 export type DemandTrendPoint = z.infer<typeof demandTrendPointSchema>;
 export type CreateCalculationRunInput = z.infer<typeof createCalculationRunInputSchema>;
 export type RunRecommendationFilters = z.infer<typeof runRecommendationFiltersSchema>;

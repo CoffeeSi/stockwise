@@ -1,18 +1,20 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import fields
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
 from backend.domain.entities.enums import RecommendationStatus, Urgency
 from backend.domain.entities.recommendation import Recommendation, RecommendationAdjustment
 from backend.domain.repositories.recommendation_repository import RecommendationConflictError
+from backend.domain.value_objects.recommendation_display import RecommendationDisplay
 from backend.infrastructure.persistence.calculation_run_repository import _json
 from backend.infrastructure.persistence.models.calculation import RecommendationModel
-from backend.infrastructure.persistence.models.catalog import ProductModel
+from backend.infrastructure.persistence.models.catalog import CategoryModel, ProductModel, SupplierModel, WarehouseModel
 from .models.orders import PurchaseOrderItemModel, RecommendationAdjustmentModel
 
 
@@ -50,6 +52,7 @@ class SqlAlchemyRecommendationRepository:
         self, run_id: UUID, *, supplier_id: UUID | None = None,
         warehouse_id: UUID | None = None, urgency: Urgency | None = None,
         status: RecommendationStatus | None = None, category_id: UUID | None = None,
+        search: str | None = None,
         sort_by: str = "risk_score", descending: bool = True,
         limit: int = 50, offset: int = 0,
     ) -> tuple[list[Recommendation], int]:
@@ -57,7 +60,9 @@ class SqlAlchemyRecommendationRepository:
             raise ValueError(f"unsupported recommendation sort field: {sort_by}")
         if limit <= 0 or offset < 0:
             raise ValueError("limit must be positive and offset nonnegative")
-        query = select(RecommendationModel).where(RecommendationModel.calculation_run_id == run_id)
+        query = select(RecommendationModel).join(
+            ProductModel, RecommendationModel.product_id == ProductModel.id,
+        ).where(RecommendationModel.calculation_run_id == run_id)
         if supplier_id is not None:
             query = query.where(RecommendationModel.supplier_id == supplier_id)
         if warehouse_id is not None:
@@ -67,14 +72,31 @@ class SqlAlchemyRecommendationRepository:
         if status is not None:
             query = query.where(RecommendationModel.status == status)
         if category_id is not None:
-            query = query.join(ProductModel, RecommendationModel.product_id == ProductModel.id).where(
-                ProductModel.category_id == category_id
-            )
+            query = query.where(ProductModel.category_id == category_id)
+        if search and search.strip():
+            # Treat wildcard characters as literal SKU/name characters.
+            term = search.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            query = query.where(or_(ProductModel.sku.ilike(f"%{term}%", escape="\\"),
+                                    ProductModel.name.ilike(f"%{term}%", escape="\\")))
         total = self._session.scalar(select(func.count()).select_from(query.subquery())) or 0
         column = self.SORT_FIELDS[sort_by]
         ordered = column.desc() if descending else column.asc()
         models = self._session.scalars(query.order_by(ordered, RecommendationModel.id).limit(limit).offset(offset)).all()
         return [self._to_domain(model) for model in models], total
+
+    def get_display_data(self, recommendation_ids: Sequence[UUID]) -> dict[UUID, RecommendationDisplay]:
+        if not recommendation_ids:
+            return {}
+        rows = self._session.execute(select(
+            RecommendationModel.id, ProductModel.sku, ProductModel.name, ProductModel.unit,
+            SupplierModel.name, WarehouseModel.name, ProductModel.category_id, CategoryModel.name,
+        ).select_from(RecommendationModel)
+          .join(ProductModel, RecommendationModel.product_id == ProductModel.id)
+          .join(SupplierModel, RecommendationModel.supplier_id == SupplierModel.id)
+          .join(WarehouseModel, RecommendationModel.warehouse_id == WarehouseModel.id)
+          .outerjoin(CategoryModel, ProductModel.category_id == CategoryModel.id)
+          .where(RecommendationModel.id.in_(recommendation_ids)))
+        return {row[0]: RecommendationDisplay(*row) for row in rows}
 
     def add_many(self, recommendations: list[Recommendation]) -> None:
         for item in recommendations:
@@ -102,6 +124,14 @@ class SqlAlchemyRecommendationRepository:
         return self._session.scalar(select(func.count()).select_from(RecommendationModel).where(
             RecommendationModel.calculation_run_id == run_id
         )) or 0
+
+    def count_for_runs(self, run_ids: Sequence[UUID]) -> dict[UUID, int]:
+        if not run_ids:
+            return {}
+        return dict(self._session.execute(select(
+            RecommendationModel.calculation_run_id, func.count(RecommendationModel.id),
+        ).where(RecommendationModel.calculation_run_id.in_(run_ids))
+          .group_by(RecommendationModel.calculation_run_id)).all())
 
     @staticmethod
     def _to_domain(model: RecommendationModel) -> Recommendation:
@@ -187,6 +217,7 @@ class SqlAlchemyRecommendationRepository:
             RecommendationModel.effective_quantity == recommendation.effective_quantity,
             RecommendationModel.effective_quantity > 0, _not_ordered(),
         ).values(status=RecommendationStatus.ACCEPTED,
+                 calculation_details=_json(dict(recommendation.calculation_details)),
                  version=RecommendationModel.version + 1,
                  updated_at=recommendation.updated_at), recommendation.id)
 

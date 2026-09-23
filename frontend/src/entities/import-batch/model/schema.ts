@@ -18,6 +18,12 @@ export const importBatchSchema = z.object({
   row_count: z.number().int().nonnegative(),
   file_checksum: z.string(),
   validation_errors: z.array(importValidationIssueSchema),
+  warnings: z.array(z.object({ code: z.string(), count: z.number().int().nonnegative() })).default([]),
+  progress: z.object({
+    stage: z.enum(["uploaded", "validating", "persisting", "completed"]),
+    processed_rows: z.number().int().nonnegative(),
+    total_rows: z.number().int().nonnegative().nullable().optional(),
+  }).nullable().optional(),
 });
 export const importBatchDetailSchema = importBatchSchema.extend({
   file_name: z.string(),

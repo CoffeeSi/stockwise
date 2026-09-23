@@ -1,0 +1,29 @@
+"use client";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { useForm } from "react-hook-form";
+import { calculationRunsQueryOptions } from "@/entities/calculation-run";
+import { previewScenario } from "@/entities/scenario";
+import { formatNumber } from "@/shared/lib";
+import { Button, Card, ErrorMessage, Input } from "@/shared/ui";
+import { previewFormSchema, type PreviewForm } from "../model/schema";
+
+export function PreviewScenario() {
+  const runs = useQuery(calculationRunsQueryOptions({ status: "completed", limit: 100, offset: 0 }));
+  const form = useForm<PreviewForm>({ resolver: zodResolver(previewFormSchema), defaultValues: { base_run_id: "", growth_multiplier: 1, service_level: 0.95, supplier_delay_days: 0, include_anomalies: false, budget_enabled: false, budget_limit: 0 } });
+  const mutation = useMutation({ mutationFn: (input: PreviewForm) => previewScenario({ base_run_id: input.base_run_id, growth_multiplier: input.growth_multiplier, service_level: input.service_level, supplier_delay_days: input.supplier_delay_days, include_anomalies: input.include_anomalies, budget_limit: input.budget_enabled ? input.budget_limit : null }) });
+  const budgetEnabled = form.watch("budget_enabled");
+  return <div className="space-y-5"><Card className="p-6"><h2 className="text-xl font-bold">Превью What-If</h2><p className="my-3 text-sm text-muted-foreground">Сценарий использует снимок завершённого расчёта. Результат предназначен для сравнения; утверждать можно только заказы отдельного сохранённого расчёта.</p>
+    {runs.isError && <ErrorMessage error={runs.error} onRetry={() => void runs.refetch()} />}
+    <form className="grid gap-4 sm:grid-cols-2" noValidate onSubmit={form.handleSubmit((input) => mutation.mutate(input))}>
+      <label className="text-sm sm:col-span-2">Базовый расчёт<select className="mt-1 w-full rounded-xl border border-border bg-input p-3" {...form.register("base_run_id")} disabled={runs.isPending || mutation.isPending}><option value="">Выберите расчёт</option>{runs.data?.items.map((run) => <option value={run.id} key={run.id}>{new Date(run.started_at).toLocaleString("ru-RU")} · {run.id}</option>)}</select>{form.formState.errors.base_run_id && <span role="alert" className="text-xs text-destructive">{form.formState.errors.base_run_id.message}</span>}</label>
+      <label className="text-sm">Множитель роста<Input type="number" min={0.01} max={100} step={0.01} {...form.register("growth_multiplier", { valueAsNumber: true })} />{form.formState.errors.growth_multiplier && <span role="alert" className="text-xs text-destructive">{form.formState.errors.growth_multiplier.message}</span>}</label>
+      <label className="text-sm">Уровень сервиса (0–1)<Input type="number" min={0.01} max={1} step={0.01} {...form.register("service_level", { valueAsNumber: true })} />{form.formState.errors.service_level && <span role="alert" className="text-xs text-destructive">{form.formState.errors.service_level.message}</span>}</label>
+      <label className="text-sm">Дополнительная задержка, дней<Input type="number" min={0} max={3650} step={1} {...form.register("supplier_delay_days", { valueAsNumber: true })} />{form.formState.errors.supplier_delay_days && <span role="alert" className="text-xs text-destructive">{form.formState.errors.supplier_delay_days.message}</span>}</label>
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" {...form.register("include_anomalies")} />Включить срезанные выбросы в спрос</label>
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" {...form.register("budget_enabled")} />Ограничить бюджет</label>
+      {budgetEnabled && <label className="text-sm">Бюджет в валюте снимка<Input type="number" min={0.01} max={999999999999} step={0.01} {...form.register("budget_limit", { valueAsNumber: true })} />{form.formState.errors.budget_limit && <span role="alert" className="text-xs text-destructive">{form.formState.errors.budget_limit.message}</span>}</label>}
+      <Button type="submit" disabled={mutation.isPending || runs.isPending || !runs.data?.items.length}>{mutation.isPending ? "Считаем превью…" : "Сравнить сценарий"}</Button>
+    </form>{runs.isSuccess && runs.data.items.length === 0 && <p className="mt-3 text-sm text-muted-foreground">Сначала завершите расчёт по загруженным данным.</p>}
+  </Card>{mutation.isError && <ErrorMessage title="Не удалось рассчитать сценарий" error={mutation.error} />}{mutation.isSuccess && <Card className="space-y-4 p-6"><h3 className="font-bold">Результат превью</h3><p className="text-sm">Количество: {formatNumber(mutation.data.totals.quantity)} · Критических позиций: {mutation.data.totals.critical_count} · Сумма: {mutation.data.totals.amount === null ? "цены недоступны" : `${formatNumber(mutation.data.totals.amount)} ${mutation.data.totals.currency ?? ""}`}</p>{mutation.data.totals.budget_gap !== null && <p className="text-sm">Непокрытая потребность: {formatNumber(mutation.data.totals.budget_gap)} {mutation.data.totals.currency}</p>}{mutation.data.limitations.map((limitation) => <p key={limitation} className="text-xs text-muted-foreground">{limitation}</p>)}<div className="max-h-96 overflow-auto"><table className="w-full text-left text-sm"><thead><tr className="border-b border-border text-muted-foreground"><th className="p-2">Рекомендация</th><th className="p-2">Было</th><th className="p-2">Превью</th></tr></thead><tbody>{mutation.data.items.map((item) => <tr key={item.recommendation_id} className="border-b border-border" title={item.reason}><td className="p-2 font-mono text-xs">{item.recommendation_id}</td><td className="p-2">{formatNumber(item.baseline_quantity)}</td><td className="p-2 font-semibold">{formatNumber(item.simulated_quantity)}</td></tr>)}</tbody></table></div></Card>}</div>;
+}

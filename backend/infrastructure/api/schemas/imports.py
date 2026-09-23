@@ -1,9 +1,15 @@
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 
 from backend.domain.enums import ImportSourceType, ImportStatus
+
+
+class ImportProgressResponse(BaseModel):
+    stage: Literal["uploaded", "validating", "persisting", "completed"]
+    processed_rows: int = Field(ge=0)
+    total_rows: int | None = Field(default=None, ge=0)
 
 
 class ImportResponse(BaseModel):
@@ -13,6 +19,8 @@ class ImportResponse(BaseModel):
     row_count: int
     file_checksum: str
     validation_errors: list[dict[str, Any]] = Field(default_factory=list)
+    warnings: list[dict[str, Any]] = Field(default_factory=list)
+    progress: ImportProgressResponse | None = None
 
 
 class ImportStatusResponse(ImportResponse):

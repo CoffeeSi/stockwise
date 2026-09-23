@@ -62,9 +62,11 @@ function errorFromBody(status: number, raw: unknown): ApiError {
   const code = typeof detail === "object" && detail !== null ? detail.code : undefined;
   const serverMessage = typeof detail === "string" ? detail : detail?.message;
   const message = status === 401
-    ? "Сервер отклонил запрос (401)."
+    ? "Войдите в систему. Логин или пароль неверны, либо сессия истекла."
     : status === 403
-    ? "Недостаточно прав для этой операции."
+    ? typeof detail === "object" && detail !== null && detail.code === "invalid_origin"
+      ? "Запрос пришёл с неизвестного адреса. Добавьте адрес StockWise в CORS_ORIGINS в .env и перезапустите Compose."
+      : "Недостаточно прав для этой операции."
     : status === 404
       ? "Ресурс не найден (404)."
       : status === 501
@@ -151,6 +153,9 @@ async function withResponse<T>(
 
 async function assertOk(response: Response): Promise<void> {
   if (response.ok) return;
+  if (response.status === 401 && typeof window !== "undefined" && !response.url.includes("/api/auth/")) {
+    window.dispatchEvent(new Event("stockwise:unauthorized"));
+  }
   const bodyText = await response.text();
   let body: unknown;
   try {

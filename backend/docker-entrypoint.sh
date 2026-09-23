@@ -22,13 +22,16 @@ for attempt in range(1, max_retries + 1):
         print("Database connection successfully established.")
         sys.exit(0)
     except Exception as exc:
-        print(f"Waiting for database (attempt {attempt}/{max_retries}): {exc}")
+        print(f"Waiting for database (attempt {attempt}/{max_retries}): {type(exc).__name__}")
         time.sleep(retry_interval)
 
 print("Error: Database connection timed out.", file=sys.stderr)
 sys.exit(1)
 EOF
 fi
+
+# Ensure credentials and the durable job queue exist before API startup.
+python -m backend.infrastructure.migrate
 
 # Execute main container command
 exec "$@"

@@ -1,4 +1,5 @@
 from .base import Base
+from .background_jobs import BackgroundJobModel
 from .catalog import (
     CategoryModel,
     ProductModel,
@@ -35,6 +36,7 @@ from .orders import (
 
 __all__ = [
     "Base",
+    "BackgroundJobModel",
     "CategoryModel",
     "GrowthAssumptionModel",
     "ImportBatchModel",

@@ -40,7 +40,10 @@ class ImportRepository(Protocol):
 
     def mark_processing(self, batch_id: UUID) -> ImportBatch: ...
 
-    def mark_completed(self, batch_id: UUID, *, row_count: int) -> ImportBatch: ...
+    def mark_completed(
+        self, batch_id: UUID, *, row_count: int,
+        warnings: tuple[dict[str, Any], ...] = (),
+    ) -> ImportBatch: ...
 
     def mark_failed(
         self,

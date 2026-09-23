@@ -7,6 +7,7 @@ export const recommendationStatusSchema = z.enum([
 ]);
 
 export const calculationComponentsSchema = z.object({
+  budget_allocation: z.object({ method: z.string(), unconstrained_quantity: apiDecimalSchema, allocated_quantity: apiDecimalSchema }).nullable().optional(),
   baseline: apiDecimalSchema.nullable().optional(),
   raw_demand: apiDecimalSchema.nullable().optional(),
   return_adjustment: apiDecimalSchema.nullable().optional(),
@@ -111,7 +112,16 @@ export const adjustRecommendationInputSchema = z.strictObject({
   version: z.number().int().positive(),
 });
 
+export const acceptRecommendationInputSchema = z.strictObject({ version: z.number().int().positive() });
+export const acceptRecommendationsInputSchema = z.strictObject({
+  calculation_run_id: apiUuidSchema,
+  items: z.array(z.strictObject({ recommendation_id: apiUuidSchema, version: z.number().int().positive() })).min(1).max(500)
+    .refine((items) => new Set(items.map((item) => item.recommendation_id)).size === items.length, "Рекомендации не должны повторяться."),
+});
+export const acceptRecommendationsResponseSchema = z.object({ items: z.array(recommendationSchema), accepted_count: z.number().int().nonnegative() });
+
 export type Recommendation = z.infer<typeof recommendationSchema>;
 export type RecommendationPage = z.infer<typeof recommendationPageSchema>;
 export type RecommendationExplanation = z.infer<typeof recommendationExplanationSchema>;
 export type AdjustRecommendationInput = z.infer<typeof adjustRecommendationInputSchema>;
+export type AcceptRecommendationsInput = z.infer<typeof acceptRecommendationsInputSchema>;

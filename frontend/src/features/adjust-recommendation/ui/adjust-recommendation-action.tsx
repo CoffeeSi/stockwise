@@ -15,6 +15,7 @@ import {
   type Recommendation,
 } from "@/entities/recommendation";
 import { ApiError } from "@/shared/api";
+import { useSessionUser } from "@/entities/user";
 import { Button, Input } from "@/shared/ui";
 import { adjustmentFormSchema, type AdjustmentFormValues } from "../model/schema";
 
@@ -38,6 +39,7 @@ function mutationErrorMessage(error: unknown): string {
 }
 
 export function AdjustRecommendationAction({ recommendation, onSaved }: Props) {
+  const user = useSessionUser();
   const quantityId = useId();
   const reasonId = useId();
   const [open, setOpen] = useState(false);
@@ -107,6 +109,7 @@ export function AdjustRecommendationAction({ recommendation, onSaved }: Props) {
     setOpen(true);
   }
 
+  if (user?.role !== "buyer" && user?.role !== "admin") return null;
   if (!open) {
     return <Button type="button" size="sm" variant="secondary" onClick={startEditing} disabled={closed || invalidTerms} title={closed ? "Закрытую рекомендацию изменить нельзя" : invalidTerms ? "Условия поставки некорректны" : undefined}>
       <Pencil className="h-3.5 w-3.5" />Изменить

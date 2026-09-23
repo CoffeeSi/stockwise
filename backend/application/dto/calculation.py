@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from typing import Any, Mapping
 from uuid import UUID
 
@@ -16,6 +17,8 @@ class RunCalculationCommand:
     warehouse_id: UUID | None = None
     category_id: UUID | None = None
     demand_source: DemandSource = DemandSource.TRANSACTIONS
+    budget_limit: Decimal | None = None
+    currency: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

@@ -1,6 +1,8 @@
 import { create } from "zustand";
 
 type SelectionState = {
+  scope: string | null;
+  setScope: (scope: string) => void;
   selectedIds: string[];
   toggle: (id: string) => void;
   selectMany: (ids: string[]) => void;
@@ -9,6 +11,8 @@ type SelectionState = {
 };
 
 export const useSelectionStore = create<SelectionState>((set) => ({
+  scope: null,
+  setScope: (scope) => set((state) => state.scope === scope ? state : { scope, selectedIds: [] }),
   selectedIds: [],
   toggle: (id) => set((state) => ({
     selectedIds: state.selectedIds.includes(id)

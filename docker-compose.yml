@@ -33,13 +33,20 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-procurement}}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       JWT_ACCESS_MINUTES: ${JWT_ACCESS_MINUTES:-30}
+      JWT_SECRET: ${JWT_SECRET:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      OPENAI_TIMEOUT_SECONDS: ${OPENAI_TIMEOUT_SECONDS:-15.0}
       DB_MAX_RETRIES: ${DB_MAX_RETRIES:-30}
       DB_RETRY_INTERVAL: ${DB_RETRY_INTERVAL:-2}
       PORT: 8000
+      ORDER_EXPORT_DIRECTORY: /app/var/order-exports
+      IMPORT_SPOOL_DIRECTORY: /app/var/import-spool
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     volumes:
       - backend_logs:/app/logs
+      - backend_artifacts:/app/var
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/api/v1/health || exit 1"]
       interval: 15s
@@ -63,6 +70,7 @@ services:
     environment:
       INTERNAL_API_URL: ${INTERNAL_API_URL:-http://backend:8000/api/v1}
       SERVER_API_URL: ${SERVER_API_URL:-http://backend:8000/api/v1}
+      FRONTEND_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       PORT: 3000
       HOSTNAME: "0.0.0.0"
     ports:
@@ -80,3 +88,5 @@ volumes:
     name: procurement_postgres_data
   backend_logs:
     name: procurement_backend_logs
+  backend_artifacts:
+    name: procurement_backend_artifacts

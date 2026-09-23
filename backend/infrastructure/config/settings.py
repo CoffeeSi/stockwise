@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Any
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
@@ -32,11 +32,24 @@ class CorsSettings(BaseSettings):
 class Settings(CorsSettings):
     database_url: str = Field(repr=False)
     db_echo: bool = False
+    jwt_secret: SecretStr | None = None
+    jwt_access_minutes: int = Field(default=30, ge=5, le=1440)
     openai_api_key: str | None = None
     openai_model: str = "gpt-4o-mini"
     openai_timeout_seconds: float = 15.0
     ai_cache_ttl_seconds: int = 300
     order_export_directory: Path = PROJECT_ROOT / "var" / "order-exports"
+    import_spool_directory: Path = PROJECT_ROOT / "var" / "import-spool"
+
+    @field_validator("jwt_secret")
+    @classmethod
+    def validate_jwt_secret(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is None or not value.get_secret_value():
+            return None
+        if len(value.get_secret_value().encode("utf-8")) < 32:
+            raise ValueError("JWT_SECRET must contain at least 32 bytes")
+        return value
+
     @model_validator(mode="before")
     @classmethod
     def require_database_url(cls, values: dict[str, Any]) -> dict[str, Any]:
