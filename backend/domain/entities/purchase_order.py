@@ -105,3 +105,20 @@ class PurchaseOrder:
         if self.status is PurchaseOrderStatus.CANCELLED:
             raise ValueError("order is already cancelled")
         self.status = PurchaseOrderStatus.CANCELLED
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class OrderSummary:
+    id: UUID
+    order_number: str
+    supplier_id: UUID
+    supplier_name: str
+    warehouse_id: UUID
+    warehouse_name: str
+    created_from_run_id: UUID
+    status: PurchaseOrderStatus
+    created_at: datetime
+    approved_at: datetime | None
+    item_count: int
+    total_amount: Decimal | None
+    currency: str | None

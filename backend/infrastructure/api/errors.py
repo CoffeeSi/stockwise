@@ -8,6 +8,10 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from backend.application.ports.export_artifacts import ExportArtifactUnavailableError
 from backend.application.use_cases.import_file import InvalidImportFileError
 from backend.application.use_cases.export_order import OrderExportReferenceError
+from backend.application.use_cases.bulk_accept_recommendations import RecommendationSelectionConflictError
+from backend.domain.entities.recommendation import RecommendationQuantityError
+from backend.domain.entities.background_job import IdempotencyConflictError
+from backend.domain.services.budget import BudgetInputError
 from backend.domain.errors import InvalidEntityStateError
 from backend.domain.repositories.import_repository import DuplicateImportError, InvalidImportStatusTransitionError
 from backend.domain.repositories.order_repository import (
@@ -30,6 +34,8 @@ def safe_issues(issues) -> list[dict]:
             continue
         if "missing_columns" in issue:
             result.append({"missing_columns": [name for name in issue["missing_columns"] if name in known]})
+        elif issue.get("code") == "ai_mapping_unavailable":
+            result.append({"message": "Не удалось распознать столбцы через OpenAI. Проверьте OPENAI_API_KEY и структуру файла."})
         elif type(issue.get("row")) is int:
             result.append({"row": issue["row"], "message": "invalid row values"})
         else:
@@ -41,6 +47,28 @@ def invoke(operation: Callable[..., T], *args, **kwargs) -> T:
     """Translate known use-case failures; unexpected exceptions remain server errors."""
     try:
         return operation(*args, **kwargs)
+    except IdempotencyConflictError:
+        raise HTTPException(409, detail={"code": "idempotency_conflict", "message": "Idempotency key belongs to another request"}) from None
+    except BudgetInputError as error:
+        messages = {
+            "budget_price_missing": "Every positive recommendation must have a saved price and currency",
+            "budget_currency_mismatch": "A budget requires a single matching purchase currency",
+            "budget_currency_missing": "Specify the budget currency when no positive priced recommendations exist",
+            "invalid_budget": "Budget must be finite and positive",
+        }
+        raise HTTPException(422, detail={"code": error.code, "message": messages.get(error.code, "Invalid budget inputs")}) from None
+    except RecommendationSelectionConflictError as error:
+        raise HTTPException(409, detail={
+            "code": "selection_conflict",
+            "message": "Selected recommendations are unavailable, changed, or already ordered",
+            "recommendation_ids": [str(value) for value in error.recommendation_ids],
+        }) from None
+    except RecommendationQuantityError as error:
+        raise HTTPException(422, detail={
+            "code": "invalid_order_quantity", "message": "Quantity must be zero or meet MOQ and package size",
+            "recommendation_id": str(error.recommendation_id),
+            "moq": str(error.moq), "package_size": str(error.package_size),
+        }) from None
     except (RecommendationNotFoundError, OrderNotFoundError, ImportUserNotFoundError):
         raise HTTPException(404, detail={"code": "not_found"}) from None
     except (RecommendationConflictError, InvalidEntityStateError, InvalidOrderPersistenceStateError,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from backend.infrastructure.persistence.calculation_run_repository import SqlAlchemyCalculationRunRepository
+from backend.infrastructure.persistence.background_job_repository import SqlAlchemyBackgroundJobRepository
 from backend.infrastructure.persistence.import_repository import SqlAlchemyImportRepository
 from backend.infrastructure.persistence.inventory_repository import SqlAlchemyInventoryRepository
 from backend.infrastructure.persistence.material_requirement_repository import SqlAlchemyMaterialRequirementRepository
@@ -17,6 +18,7 @@ from backend.infrastructure.persistence.database import Database
 
 def create_application_uow_factory(database: Database):
     repositories = RepositoryFactories(
+        jobs=SqlAlchemyBackgroundJobRepository,
         imports=SqlAlchemyImportRepository,
         sales=SqlAlchemySalesRepository,
         inventory=SqlAlchemyInventoryRepository,

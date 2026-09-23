@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
@@ -50,8 +50,10 @@ class ImportUserNotFoundError(ValueError):
 class SqlAlchemyImportGateway:
     """Transaction coordinator and write-side adapter for one imported file."""
 
-    def __init__(self, session_factory: sessionmaker[Session]) -> None:
+    def __init__(self, session_factory: sessionmaker[Session],
+                 complete_hook: Callable[[Session, int], None] | None = None) -> None:
         self._session_factory = session_factory
+        self._complete_hook = complete_hook
 
     def start(self, command: ImportFileCommand, *, checksum: str) -> ImportBatch:
         with self._session_factory.begin() as session:
@@ -85,7 +87,12 @@ class SqlAlchemyImportGateway:
                     current.status.value, ImportStatus.COMPLETED.value
                 )
             row_count = self._write_rows(session, batch.id, parsed)
-            return repository.mark_completed(batch.id, row_count=row_count)
+            completed = repository.mark_completed(
+                batch.id, row_count=row_count, warnings=parsed.warnings,
+            )
+            if self._complete_hook is not None:
+                self._complete_hook(session, row_count)
+            return completed
 
     def fail(
         self,

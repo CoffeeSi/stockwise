@@ -6,7 +6,7 @@ from uuid import UUID
 
 from backend.domain.entities.enums import PurchaseOrderStatus
 from backend.domain.entities.order_export import OrderExport
-from backend.domain.entities.purchase_order import PurchaseOrder
+from backend.domain.entities.purchase_order import OrderSummary, PurchaseOrder
 
 
 class OrderRepositoryError(RuntimeError):
@@ -45,6 +45,10 @@ class OrderRepository(Protocol):
     def get(self, order_id: UUID) -> PurchaseOrder | None: ...
 
     def get_by_number(self, order_number: str) -> PurchaseOrder | None: ...
+
+    def list_page(self, *, calculation_run_id: UUID | None = None, supplier_id: UUID | None = None,
+                  status: PurchaseOrderStatus | None = None, limit: int = 50,
+                  offset: int = 0) -> tuple[list[OrderSummary], int]: ...
 
     def list_by_supplier(
         self,

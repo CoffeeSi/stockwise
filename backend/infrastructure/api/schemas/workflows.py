@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, computed_field, field_validator
 
 from backend.domain.entities.enums import CalculationRunStatus, PurchaseOrderStatus, RecommendationStatus, Urgency
 from backend.domain.value_objects.demand import DemandSource
@@ -22,6 +22,8 @@ class RunCalculationRequest(RequestModel):
     horizon_days: int = Field(gt=0, strict=True)
     warehouse_id: UUID | None = None
     category_id: UUID | None = None
+    budget_limit: Decimal | None = Field(default=None, gt=0, max_digits=18, decimal_places=4, allow_inf_nan=False)
+    currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
 
 
 class RunParameters(ReadModel):
@@ -34,6 +36,18 @@ class RunParameters(ReadModel):
     safety_stock_days: int | None = None
     demand_config: dict[str, str | int] | None = None
     risk_policy: dict[str, str] | None = None
+    budget_limit: Decimal | None = None
+    currency: str | None = None
+    allocated_amount: Decimal | None = None
+    unmet_need_amount: Decimal | None = None
+    optimization_method: str | None = None
+    analytics_policy: dict[str, str] | None = None
+
+
+class CalculationProgressResponse(ReadModel):
+    phase: str
+    completed: int = Field(ge=0)
+    total: int = Field(ge=0)
 
 
 class CalculationRunResponse(ReadModel):
@@ -45,12 +59,37 @@ class CalculationRunResponse(ReadModel):
     algorithm_version: str
     import_batch_ids: list[UUID]
     recommendation_count: int | None = None
+    progress: CalculationProgressResponse | None = None
     error_details: dict[str, str] | None = None
 
     @field_validator("error_details", mode="before")
     @classmethod
     def safe_error(cls, value):
-        return {"code": "calculation_failed"} if value else None
+        if not value:
+            return None
+        code = value.get("code") if isinstance(value, dict) else None
+        allowed = {"missing_imports", "budget_price_missing", "budget_currency_mismatch", "budget_currency_missing"}
+        return {"code": code if code in allowed else "calculation_failed"}
+
+    @computed_field
+    @property
+    def budget_limit(self) -> Decimal | None:
+        return self.parameters.budget_limit
+
+    @computed_field
+    @property
+    def allocated_amount(self) -> Decimal | None:
+        return self.parameters.allocated_amount
+
+    @computed_field
+    @property
+    def unmet_need_amount(self) -> Decimal | None:
+        return self.parameters.unmet_need_amount
+
+    @computed_field
+    @property
+    def optimization_method(self) -> str | None:
+        return self.parameters.optimization_method
 
 
 class DemandTrendPointResponse(ReadModel):
@@ -60,6 +99,19 @@ class DemandTrendPointResponse(ReadModel):
     raw_demand: Decimal
     cleaned_demand: Decimal
     stockout_adjustment: Decimal
+
+
+class CalculationRunPageResponse(ReadModel):
+    items: list[CalculationRunResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class BudgetAllocationComponents(ReadModel):
+    method: str
+    unconstrained_quantity: Decimal
+    allocated_quantity: Decimal
 
 
 class CalculationComponents(ReadModel):
@@ -91,6 +143,7 @@ class CalculationComponents(ReadModel):
     shortage_ratio: Decimal | None = None
     lead_time_gap_ratio: Decimal | None = None
     expected_stockout_at: datetime | None = None
+    budget_allocation: BudgetAllocationComponents | None = None
 
 
 class RecommendationResponse(ReadModel):
@@ -121,6 +174,7 @@ class RecommendationResponse(ReadModel):
 
 
 class RecommendationFilters(RequestModel):
+    search: Annotated[str, StringConstraints(strip_whitespace=True, max_length=200)] | None = None
     supplier_id: UUID | None = None
     warehouse_id: UUID | None = None
     category_id: UUID | None = None
@@ -132,8 +186,21 @@ class RecommendationFilters(RequestModel):
     offset: int = Field(default=0, ge=0)
 
 
+class ProcurementRecommendationRowResponse(RecommendationResponse):
+    sku: str
+    product_name: str
+    unit: str
+    supplier_name: str
+    warehouse_name: str
+    category_id: UUID | None
+    category_name: str | None
+    unit_price: Decimal | None
+    currency: str | None
+    estimated_total: Decimal | None
+
+
 class RecommendationPageResponse(ReadModel):
-    items: list[RecommendationResponse]
+    items: list[ProcurementRecommendationRowResponse]
     total: int
     limit: int
     offset: int

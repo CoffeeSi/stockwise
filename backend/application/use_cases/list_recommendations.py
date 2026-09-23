@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from backend.application.ports.unit_of_work import UnitOfWorkFactory
+from backend.application.dto.recommendation import ProcurementRecommendationRow
 from backend.domain.entities.enums import RecommendationStatus, Urgency
-from backend.domain.entities.recommendation import Recommendation
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -16,6 +16,7 @@ class ListRecommendationsQuery:
     warehouse_id: UUID | None = None
     urgency: Urgency | None = None
     status: RecommendationStatus | None = None
+    search: str | None = None
     sort_by: str = "risk_score"
     descending: bool = True
     limit: int = 50
@@ -24,7 +25,7 @@ class ListRecommendationsQuery:
 
 @dataclass(frozen=True, slots=True)
 class RecommendationPage:
-    items: list[Recommendation]
+    items: list[ProcurementRecommendationRow]
     total: int
     limit: int
     offset: int
@@ -44,7 +45,11 @@ class ListRecommendations:
                 query.calculation_run_id, supplier_id=query.supplier_id,
                 category_id=query.category_id, warehouse_id=query.warehouse_id,
                 urgency=query.urgency, status=query.status,
+                search=query.search,
                 sort_by=query.sort_by, descending=query.descending,
                 limit=query.limit, offset=query.offset,
             )
-            return RecommendationPage(items, total, query.limit, query.offset)
+            displays = uow.recommendations.get_display_data([item.id for item in items])
+            rows = [ProcurementRecommendationRow.from_recommendation(item, displays[item.id])
+                    for item in items]
+            return RecommendationPage(rows, total, query.limit, query.offset)

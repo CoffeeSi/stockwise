@@ -15,7 +15,7 @@ from backend.infrastructure.ai.service import AiProcurementService, get_ai_servi
 from backend.infrastructure.config.settings import Settings
 
 router = APIRouter(prefix="/api/v1/ai", tags=["ai"],
-                   dependencies=[Depends(deps.get_audit_actor)])
+                   dependencies=[Depends(deps.get_current_user)])
 
 
 def get_service_dep(request: Request) -> AiProcurementService:

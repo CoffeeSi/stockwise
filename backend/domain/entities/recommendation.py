@@ -11,6 +11,16 @@ from backend.domain.value_objects.quantity import validate_quantity
 from backend.domain.errors import InvalidEntityStateError
 
 
+class RecommendationQuantityError(ValueError):
+    """A submitted quantity violates the supplier terms saved with this run."""
+
+    def __init__(self, recommendation_id: UUID, moq: Decimal, package_size: Decimal) -> None:
+        self.recommendation_id = recommendation_id
+        self.moq = moq
+        self.package_size = package_size
+        super().__init__("quantity must be zero or meet MOQ and package size")
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -110,6 +120,7 @@ class Recommendation:
             RecommendationStatus.CONVERTED_TO_ORDER,
         }:
             raise InvalidEntityStateError("closed recommendation cannot be adjusted")
+        self.validate_order_quantity(new_quantity, allow_zero=True)
         adjustment = RecommendationAdjustment(
             recommendation_id=self.id,
             previous_quantity=self.effective_quantity,
@@ -124,13 +135,32 @@ class Recommendation:
         self.updated_at = adjustment.changed_at
         return adjustment
 
-    def accept(self, *, changed_at: datetime | None = None) -> None:
+    def validate_order_quantity(self, quantity: Decimal, *, allow_zero: bool = False) -> None:
+        validate_quantity(quantity, "quantity", positive=not allow_zero)
+        if quantity == 0 and allow_zero:
+            return
+        if quantity < self.moq or quantity % self.package_size != 0:
+            raise RecommendationQuantityError(self.id, self.moq, self.package_size)
+
+    def accept(self, *, changed_by: UUID, changed_at: datetime | None = None) -> None:
         if self.status not in {RecommendationStatus.SUGGESTED, RecommendationStatus.ADJUSTED}:
             raise InvalidEntityStateError("only a suggested or adjusted recommendation can be accepted")
-        if self.effective_quantity <= 0:
-            raise ValueError("only a positive recommendation can be accepted")
+        if not isinstance(changed_by, UUID):
+            raise ValueError("changed_by must be a user UUID")
+        self.validate_order_quantity(self.effective_quantity)
         change_time = changed_at or utc_now()
         require_aware(change_time, "changed_at")
+        details = dict(self.calculation_details)
+        history = details.get("acceptance_history", [])
+        if not isinstance(history, list):
+            raise ValueError("invalid persisted acceptance history")
+        details["acceptance_history"] = [*history, {
+            "accepted_by": str(changed_by),
+            "accepted_at": change_time.isoformat(),
+            "version": self.version + 1,
+            "quantity": str(self.effective_quantity),
+        }]
+        self.calculation_details = details
         self.status = RecommendationStatus.ACCEPTED
         self.version += 1
         self.updated_at = change_time
@@ -147,8 +177,7 @@ class Recommendation:
     def mark_converted_to_order(self, *, changed_at: datetime | None = None) -> None:
         if self.status is not RecommendationStatus.ACCEPTED:
             raise ValueError("only an accepted recommendation can be converted to an order")
-        if self.effective_quantity <= 0:
-            raise ValueError("order quantity must be positive")
+        self.validate_order_quantity(self.effective_quantity)
         change_time = changed_at or utc_now()
         require_aware(change_time, "changed_at")
         self.status = RecommendationStatus.CONVERTED_TO_ORDER

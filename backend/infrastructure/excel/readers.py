@@ -10,6 +10,9 @@ import pandas as pd
 
 from backend.application.dto.imports import ImportFileCommand, ParsedImport
 from backend.domain.enums import ImportSourceType
+from backend.infrastructure.excel.ai_mapping import (
+    AiExcelMappingAssistant, MappingUnavailableError, WorkbookPreview,
+)
 
 
 class ExcelImportValidationError(ValueError):
@@ -24,9 +27,12 @@ def _header(value: object) -> str:
 
 
 COMMON_ALIASES: dict[str, tuple[str, ...]] = {
-    "sku": ("sku", "артикул", "код_товара", "код", "номенклатурный_номер"),
+    "sku": (
+        "sku", "артикул", "код_товара", "код", "номенклатурный_номер",
+        "код_1с", "номенклатура_код",
+    ),
     "product_name": ("product_name", "наименование", "номенклатура", "товар"),
-    "unit": ("unit", "единица", "ед_изм", "единица_измерения"),
+    "unit": ("unit", "единица", "ед_изм", "единица_измерения", "ед"),
     "category_code": ("category_code", "код_категории", "категория"),
     "category_name": ("category_name", "наименование_категории", "категория"),
     "warehouse_code": ("warehouse_code", "код_склада", "склад"),
@@ -78,13 +84,17 @@ SOURCE_ALIASES: dict[ImportSourceType, dict[str, tuple[str, ...]]] = {
     },
     ImportSourceType.SEASONALITY: {
         "month": ("month", "месяц", "номер_месяца"),
-        "coefficient": ("coefficient", "коэффициент", "индекс_сезонности"),
+        "coefficient": (
+            "coefficient", "коэффициент", "индекс_сезонности", "норм_коэф"
+        ),
         "valid_from": ("valid_from", "действует_с", "дата_начала"),
         "valid_to": ("valid_to", "действует_до", "дата_окончания"),
         "version": ("version", "версия"),
     },
     ImportSourceType.SUPPLIER_TERMS: {
-        "moq": ("moq", "минимальная_партия", "мин_партия"),
+        "moq": (
+            "moq", "минимальная_партия", "мин_партия", "мин_разр_к_отгр"
+        ),
         "package_size": ("package_size", "кратность", "размер_упаковки"),
         "lead_time_days": ("lead_time_days", "срок_поставки", "срок_поставки_дней"),
         "purchase_price": ("purchase_price", "закупочная_цена", "цена"),
@@ -138,36 +148,36 @@ OPAQUE_CUSTOMER_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,254}\Z")
 class ExcelImportReader:
     """Read partner XLSX files into source-specific normalized dictionaries."""
 
+    def __init__(self, ai_mapper: AiExcelMappingAssistant | None = None) -> None:
+        self._ai_mapper = ai_mapper
+
     def read(self, command: ImportFileCommand) -> ParsedImport:
         try:
-            frame = pd.read_excel(BytesIO(command.content), dtype=object, engine="openpyxl")
+            preview = WorkbookPreview.read(command.content)
+            sheet_index, header_row = self._initial_header(preview, command.source_type)
+            frame = self._read_frame(command.content, sheet_index, header_row)
         except Exception as error:
             raise ExcelImportValidationError("cannot read XLSX workbook") from error
-        if frame.empty:
-            raise ExcelImportValidationError("workbook contains no data rows")
-
-        frame = frame.dropna(how="all")
-        normalized_headers = {_header(column): column for column in frame.columns}
-        forbidden = sorted(
-            name for name in normalized_headers if self._is_forbidden_personal_header(name)
-        )
-        if forbidden:
-            raise ExcelImportValidationError(
-                "direct customer identifiers are forbidden",
-                issues=[{"columns": forbidden}],
-            )
-
-        aliases = {**COMMON_ALIASES, **SOURCE_ALIASES[command.source_type]}
-        rename: dict[object, str] = {}
-        for canonical, variants in aliases.items():
-            for variant in variants:
-                original = normalized_headers.get(_header(variant))
-                if original is not None:
-                    rename.setdefault(original, canonical)
-                    break
-        frame = frame.rename(columns=rename)
-        frame = self._reshape_wide(command.source_type, frame)
+        warnings: list[dict[str, Any]] = []
+        frame = self._prepare_frame(command.source_type, frame, warnings=warnings)
         missing = [name for name in REQUIRED[command.source_type] if name not in frame.columns]
+        if missing and self._ai_mapper is not None:
+            try:
+                aliases = {**COMMON_ALIASES, **SOURCE_ALIASES[command.source_type]}
+                mapping = self._ai_mapper.infer(
+                    command.source_type, preview, set(aliases), REQUIRED[command.source_type],
+                )
+                frame = self._read_frame(command.content, mapping.sheet_index, mapping.header_row - 1)
+                warnings.clear()
+                frame = self._prepare_frame(
+                    command.source_type, frame, mapping.columns, warnings=warnings,
+                )
+                missing = [name for name in REQUIRED[command.source_type] if name not in frame.columns]
+            except MappingUnavailableError as error:
+                raise ExcelImportValidationError(
+                    "cannot determine workbook columns",
+                    issues=[{"code": "ai_mapping_unavailable"}, {"missing_columns": missing}],
+                ) from error
         if missing:
             raise ExcelImportValidationError(
                 "required columns are missing",
@@ -190,7 +200,134 @@ class ExcelImportReader:
             )
         if not rows:
             raise ExcelImportValidationError("workbook contains no valid data rows")
-        return ParsedImport(source_type=command.source_type, rows=tuple(rows))
+        return ParsedImport(
+            source_type=command.source_type, rows=tuple(rows), warnings=tuple(warnings),
+        )
+
+    @staticmethod
+    def _read_frame(content: bytes, sheet_index: int, header_row: int) -> pd.DataFrame:
+        return pd.read_excel(
+            BytesIO(content), sheet_name=sheet_index, header=header_row,
+            dtype=object, engine="openpyxl",
+        )
+
+    @staticmethod
+    def _initial_header(preview: WorkbookPreview, source: ImportSourceType) -> tuple[int, int]:
+        if source is ImportSourceType.SEASONALITY:
+            for sheet_index, rows in enumerate(preview.sheets):
+                for row_index, row in enumerate(rows):
+                    headers = {_header(value) for value in row if value is not None}
+                    if {"месяц", "норм_коэф"}.issubset(headers):
+                        return sheet_index, row_index
+        return 0, 0
+
+    def _prepare_frame(
+        self, source: ImportSourceType, frame: pd.DataFrame,
+        ai_columns: dict[str, int] | None = None,
+        *, warnings: list[dict[str, Any]],
+    ) -> pd.DataFrame:
+        frame = frame.dropna(how="all")
+        normalized_headers = {_header(column): column for column in frame.columns}
+        forbidden = sorted(
+            name for name in normalized_headers if self._is_forbidden_personal_header(name)
+        )
+        if forbidden:
+            raise ExcelImportValidationError(
+                "direct customer identifiers are forbidden",
+                issues=[{"columns": forbidden}],
+            )
+
+        aliases = {**COMMON_ALIASES, **SOURCE_ALIASES[source]}
+        rename: dict[object, str] = {}
+        if ai_columns:
+            for canonical, index in ai_columns.items():
+                column = frame.columns[index]
+                if (source in {ImportSourceType.MONTHLY_SALES, ImportSourceType.INVENTORY}
+                        and self._date_from_header(column) is not None
+                        and canonical in {"period_start", "snapshot_at", "quantity", "quantity_on_hand"}):
+                    continue
+                if (source is ImportSourceType.IN_TRANSIT
+                        and "поступление до" in str(column).lower()
+                        and canonical in {"quantity", "expected_at", "external_order_number"}):
+                    continue
+                rename[column] = canonical
+        for canonical, variants in aliases.items():
+            if canonical in rename.values():
+                continue
+            for variant in variants:
+                original = normalized_headers.get(_header(variant))
+                if original is not None:
+                    rename.setdefault(original, canonical)
+                    break
+        frame = frame.rename(columns=rename)
+        return self._apply_partner_profile(source, normalized_headers, frame, warnings)
+
+    def _apply_partner_profile(
+        self, source: ImportSourceType, headers: dict[str, object], frame: pd.DataFrame,
+        warnings: list[dict[str, Any]],
+    ) -> pd.DataFrame:
+        names = set(headers)
+        if source is ImportSourceType.SALES and {"дата", "код", "склад", "количество"}.issubset(names):
+            frame = self._drop_partner_nondata_rows(frame)
+        elif source in {ImportSourceType.MONTHLY_SALES, ImportSourceType.INVENTORY} and "номенклатура_код" in names:
+            frame = self._drop_partner_nondata_rows(frame)
+            if "warehouse_code" not in frame.columns:
+                frame["warehouse_code"] = "__ALL_WAREHOUSES__"
+                frame["warehouse_name"] = "Все склады (агрегированные данные)"
+        elif source is ImportSourceType.IN_TRANSIT and {"код_1с", "артикул_иэк"}.issubset(names):
+            frame = self._drop_partner_nondata_rows(frame)
+            if "warehouse_code" not in frame.columns:
+                frame["warehouse_code"] = "__ALL_WAREHOUSES__"
+                frame["warehouse_name"] = "Все склады (агрегированные данные)"
+            if "supplier_code" not in frame.columns:
+                frame["supplier_code"] = "IEK_KAZAKHSTAN"
+                frame["supplier_name"] = "IEK Казахстан"
+        elif source is ImportSourceType.SEASONALITY and {"месяц", "норм_коэф"}.issubset(names):
+            frame = frame.loc[frame["month"].map(self._month_from_header).notna()].copy()
+            frame["month"] = frame["month"].map(self._month_from_header)
+            if "sku" not in frame.columns and "category_code" not in frame.columns:
+                frame["category_code"] = "__ALL_PRODUCTS__"
+                frame["category_name"] = "Все товары (общая сезонность)"
+        frame = self._apply_supplier_terms_profile(source, headers, frame, warnings)
+        return self._reshape_wide(source, frame)
+
+    @staticmethod
+    def _drop_partner_nondata_rows(frame: pd.DataFrame) -> pd.DataFrame:
+        missing_sku = frame["sku"].isna() | frame["sku"].astype(str).str.strip().eq("")
+        if "product_name" in frame.columns:
+            label = frame["product_name"].fillna("").astype(str).str.strip().str.lower()
+        else:
+            label = pd.Series("", index=frame.index)
+        summary = label.eq("") | label.eq("итого")
+        if "sold_at" in frame.columns:
+            summary = summary | frame["sold_at"].fillna("").astype(str).str.strip().str.lower().eq("итого")
+        return frame.loc[~(missing_sku & summary)].copy()
+
+    @staticmethod
+    def _apply_supplier_terms_profile(
+        source: ImportSourceType,
+        normalized_headers: dict[str, object],
+        frame: pd.DataFrame,
+        warnings: list[dict[str, Any]],
+    ) -> pd.DataFrame:
+        """Recognize the partner's IEK MOQ workbook, which omits supplier columns."""
+        headers = set(normalized_headers)
+        is_iek_moq_template = {
+            "код_1с", "артикул_поставщика", "мин_разр_к_отгр"
+        }.issubset(headers)
+        if source is not ImportSourceType.SUPPLIER_TERMS or not is_iek_moq_template:
+            return frame
+
+        # The template is explicitly the IEK supplier catalog. Its 1C code is
+        # the product key used by sales imports; the supplier article is not.
+        if "supplier_code" not in frame.columns:
+            frame["supplier_code"] = "IEK_KAZAKHSTAN"
+            frame["supplier_name"] = "IEK Казахстан"
+        missing_moq = frame["moq"].isna() | frame["moq"].astype(str).str.strip().isin({"#N/A", "N/A"})
+        skipped = int(missing_moq.sum())
+        if skipped:
+            warnings.append({"code": "missing_moq", "count": skipped})
+        return frame.loc[~missing_moq].copy()
 
     def _reshape_wide(
         self, source: ImportSourceType, frame: pd.DataFrame
@@ -207,6 +344,8 @@ class ExcelImportReader:
             return self._melt_period_columns(
                 frame, period_name="snapshot_at", value_name="quantity_on_hand"
             )
+        if source is ImportSourceType.IN_TRANSIT and "quantity" not in frame.columns:
+            return self._melt_order_columns(frame)
         if source is ImportSourceType.SEASONALITY and not {
             "month", "coefficient"
         }.issubset(frame.columns):
@@ -244,6 +383,36 @@ class ExcelImportReader:
                 records.append(
                     {**base, period_name: period, value_name: value}
                 )
+        return pd.DataFrame.from_records(records)
+
+    def _melt_order_columns(self, frame: pd.DataFrame) -> pd.DataFrame:
+        order_columns: dict[object, tuple[date, str]] = {}
+        for column in frame.columns:
+            title = str(column)
+            if "поступление до" not in title.lower():
+                continue
+            expected_at = self._date_from_header(title)
+            order = re.search(r"УТ-\d+", title, flags=re.IGNORECASE)
+            if expected_at is not None and order is not None:
+                order_columns[column] = expected_at, order.group().upper()
+        if not order_columns:
+            return frame
+        identifier_columns = [column for column in frame.columns if column not in order_columns]
+        records: list[dict[str, Any]] = []
+        for _, row in frame.iterrows():
+            base = {
+                column: row[column]
+                for column in identifier_columns
+                if not self._missing(row[column])
+            }
+            for column, (expected_at, order_number) in order_columns.items():
+                value = row[column]
+                if self._missing(value):
+                    continue
+                records.append({
+                    **base, "external_order_number": order_number,
+                    "expected_at": expected_at, "quantity": value,
+                })
         return pd.DataFrame.from_records(records)
 
     def _melt_month_columns(self, frame: pd.DataFrame) -> pd.DataFrame:
@@ -442,7 +611,7 @@ class ExcelImportReader:
 
     @staticmethod
     def _datetime(value: object, name: str) -> datetime:
-        parsed = pd.to_datetime(value, errors="raise").to_pydatetime()
+        parsed = pd.to_datetime(value, errors="raise", dayfirst=True).to_pydatetime()
         if not isinstance(parsed, datetime):
             raise ValueError(f"{name} must be a datetime")
         if parsed.tzinfo is None or parsed.utcoffset() is None:
@@ -451,7 +620,7 @@ class ExcelImportReader:
 
     @staticmethod
     def _date(value: object, name: str) -> date:
-        parsed = pd.to_datetime(value, errors="raise")
+        parsed = pd.to_datetime(value, errors="raise", dayfirst=True)
         result = parsed.date()
         if not isinstance(result, date):
             raise ValueError(f"{name} must be a date")
@@ -490,9 +659,9 @@ class ExcelImportReader:
             day, month, year = match.groups()
             return date(int(year), int(month), int(day))
         months = {
-            "январ": 1, "феврал": 2, "март": 3, "апрел": 4,
-            "ма": 5, "июн": 6, "июл": 7, "август": 8,
-            "сентябр": 9, "октябр": 10, "ноябр": 11, "декабр": 12,
+            "янв": 1, "фев": 2, "мар": 3, "апр": 4,
+            "май": 5, "июн": 6, "июл": 7, "авг": 8,
+            "сен": 9, "окт": 10, "ноя": 11, "дек": 12,
         }
         year_match = re.search(r"20\d{2}", text)
         if year_match:

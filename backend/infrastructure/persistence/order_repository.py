@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from collections import defaultdict
 from datetime import datetime, timezone
+from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from backend.domain.entities.enums import PurchaseOrderStatus
 from backend.domain.entities.order_export import OrderExport
-from backend.domain.entities.purchase_order import PurchaseOrder, PurchaseOrderItem
+from backend.domain.entities.purchase_order import OrderSummary, PurchaseOrder, PurchaseOrderItem
+from backend.domain.value_objects.supplier_snapshot import snapshot_price
+from backend.infrastructure.persistence.models.calculation import RecommendationModel
+from backend.infrastructure.persistence.models.catalog import SupplierModel, WarehouseModel
 from backend.domain.repositories.order_repository import (
     DuplicateOrderNumberError,
     InvalidOrderPersistenceStateError,
@@ -45,6 +50,51 @@ class SqlAlchemyOrderRepository:
             .limit(1)
         )
         return self._to_domain(model) if model is not None else None
+
+    def list_page(self, *, calculation_run_id: UUID | None = None, supplier_id: UUID | None = None,
+                  status: PurchaseOrderStatus | None = None, limit: int = 50,
+                  offset: int = 0) -> tuple[list[OrderSummary], int]:
+        query = (select(PurchaseOrderModel, SupplierModel.name, WarehouseModel.name)
+                 .join(SupplierModel, SupplierModel.id == PurchaseOrderModel.supplier_id)
+                 .join(WarehouseModel, WarehouseModel.id == PurchaseOrderModel.warehouse_id))
+        if calculation_run_id is not None:
+            query = query.where(PurchaseOrderModel.created_from_run_id == calculation_run_id)
+        if supplier_id is not None:
+            query = query.where(PurchaseOrderModel.supplier_id == supplier_id)
+        if status is not None:
+            query = query.where(PurchaseOrderModel.status == status)
+        total = self._session.scalar(select(func.count()).select_from(query.subquery())) or 0
+        headers = self._session.execute(query.order_by(
+            PurchaseOrderModel.created_at.desc(), PurchaseOrderModel.id,
+        ).limit(limit).offset(offset)).all()
+        if not headers:
+            return [], total
+        item_rows = self._session.execute(select(PurchaseOrderItemModel, RecommendationModel.calculation_details)
+            .join(RecommendationModel, RecommendationModel.id == PurchaseOrderItemModel.recommendation_id)
+            .where(PurchaseOrderItemModel.purchase_order_id.in_([header[0].id for header in headers]))).all()
+        grouped = defaultdict(list)
+        for item, details in item_rows:
+            _price, currency = snapshot_price(details)
+            grouped[item.purchase_order_id].append((item.total_amount, currency))
+        summaries = []
+        for order, supplier_name, warehouse_name in headers:
+            values = grouped[order.id]
+            currencies = {currency for _amount, currency in values}
+            currency = next(iter(currencies)) if len(currencies) == 1 and None not in currencies else None
+            # A sum is meaningful only if every line is priced in the same known currency.
+            amount = (sum((value for value, _currency in values), Decimal("0"))
+                      if values and currency is not None and all(value is not None for value, _currency in values)
+                      else None)
+            summaries.append(OrderSummary(
+                id=order.id, order_number=order.order_number,
+                supplier_id=order.supplier_id, supplier_name=supplier_name,
+                warehouse_id=order.warehouse_id, warehouse_name=warehouse_name,
+                created_from_run_id=order.created_from_run_id, status=order.status,
+                created_at=_aware(order.created_at),
+                approved_at=_aware(order.approved_at) if order.approved_at else None,
+                item_count=len(values), total_amount=amount, currency=currency,
+            ))
+        return summaries, total
 
     def list_by_supplier(
         self,

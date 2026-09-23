@@ -31,7 +31,7 @@ RUN chmod +x /app/docker-entrypoint.sh
 COPY . /app/backend
 
 # Create logs directory and assign permissions to non-root appuser
-RUN mkdir -p /app/logs && \
+RUN mkdir -p /app/logs /app/var/order-exports /app/var/import-spool && \
     chown -R appuser:appuser /app
 
 USER appuser

@@ -1,12 +1,13 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, CheckCircle2, FileSpreadsheet, RotateCcw, Upload, X } from "lucide-react";
 import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 import { useForm } from "react-hook-form";
 import { importBatchQueryOptions, uploadImportFile, type ImportBatch } from "@/entities/import-batch";
 import { ApiError } from "@/shared/api";
+import { useSessionUser } from "@/entities/user";
 import { Button, Card } from "@/shared/ui";
 import { importFormSchema, type ImportFormInput } from "../model/schema";
 
@@ -46,7 +47,20 @@ function getValidationMessage(value: unknown): string {
   return `${row}${message}`;
 }
 
-export function ImportDataAction({ onImported }: { onImported?: (batch: ImportBatch) => void }) {
+function detectSourceType(fileName: string): ImportFormInput["sourceType"] | null {
+  const name = fileName.toLocaleLowerCase("ru").replace(/ё/g, "е");
+  if (name.includes("moq")) return "supplier_terms";
+  if (name.includes("динамика продаж")) return "sales";
+  if (name.includes("ежемесячные продажи")) return "monthly_sales";
+  if (name.includes("ежемесячные остатки")) return "inventory";
+  if (name.includes("путь иэк")) return "in_transit";
+  if (name.includes("сезонность")) return "seasonality";
+  return null;
+}
+
+export function ImportDataAction({ onImported, onStartCalculation }: { onImported?: (batch: ImportBatch) => void; onStartCalculation?: () => void }) {
+  const user = useSessionUser();
+  const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
@@ -90,12 +104,15 @@ export function ImportDataAction({ onImported }: { onImported?: (batch: ImportBa
     if (batch?.status === "completed" && notifiedBatchIdRef.current !== batch.batch_id) {
       notifiedBatchIdRef.current = batch.batch_id;
       onImported?.(batch);
+      void queryClient.invalidateQueries({ queryKey: ["catalog"] });
     }
-  }, [batch, onImported]);
+  }, [batch, onImported, queryClient]);
 
   function chooseFile(nextFile: File | undefined) {
     if (!nextFile) return;
     setValue("file", nextFile, { shouldDirty: true, shouldValidate: true });
+    const sourceType = detectSourceType(nextFile.name);
+    if (sourceType) setValue("sourceType", sourceType, { shouldDirty: true, shouldValidate: true });
     setBatchId(null);
     setProgress(null);
     mutation.reset();
@@ -133,6 +150,11 @@ export function ImportDataAction({ onImported }: { onImported?: (batch: ImportBa
     ? mutation.error.validationErrors
     : batch?.validation_errors ?? [];
   const showUploadProgress = uploadInProgress && progress !== null;
+  const serverStage = batch?.progress?.stage;
+  const stageLabel = serverStage === "uploaded" ? "Файл в очереди" : serverStage === "validating" ? "Проверка Excel" : serverStage === "persisting" ? "Сохранение строк" : "Обработка импорта";
+  const processed = batch?.progress?.processed_rows ?? 0;
+  const totalRows = batch?.progress?.total_rows;
+  if (user?.role !== "buyer" && user?.role !== "admin") return null;
 
   return <>
     <Button type="button" variant="secondary" onClick={() => setOpen(true)}><Upload className="h-4 w-4" />Загрузить файлы (1С/Excel)</Button>
@@ -155,11 +177,14 @@ export function ImportDataAction({ onImported }: { onImported?: (batch: ImportBa
           {errors.file && <p role="alert" className="text-xs text-destructive">{errors.file.message}</p>}
           {(uploadInProgress || serverProcessing) && <div role="status" aria-live="polite" className="rounded-xl border border-border bg-card-muted p-4">
             <div className="flex justify-between gap-3 text-xs"><span className="font-semibold">{uploadInProgress ? progress === 100 ? "Файл передан, сервер проверяет данные…" : "Загрузка файла…" : "Обработка импорта на сервере…"}</span>{showUploadProgress && <span>{progress}%</span>}</div>
-            <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted"><div className={`h-full rounded-full bg-primary transition-[width] ${progress === null ? "w-1/3 animate-pulse" : ""}`} style={progress === null ? undefined : { width: `${progress}%` }} /></div>
+            {showUploadProgress && <progress className="mt-3 h-2 w-full accent-primary" value={progress ?? 0} max={100} aria-label="Передача файла" />}
+            {serverProcessing && <p className="mt-2 text-xs text-muted-foreground">{stageLabel}: {processed}{totalRows == null ? " строк" : ` из ${totalRows} строк`}</p>}
           </div>}
           {mutation.isError && <div role="alert" className="flex gap-2 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"><AlertCircle className="h-4 w-4 shrink-0" /><span>{getErrorMessage(mutation.error)}</span></div>}
           {statusQuery.isError && <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"><p>Не удалось получить статус импорта: {getErrorMessage(statusQuery.error)}</p><Button type="button" variant="secondary" size="sm" className="mt-2" onClick={() => void statusQuery.refetch()}><RotateCcw className="h-3.5 w-3.5" />Повторить</Button></div>}
           {complete && batch && <div role="status" className="flex gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-500"><CheckCircle2 className="h-4 w-4 shrink-0" /><span>Импорт завершён: обработано {batch.row_count} строк. ID партии: {batch.batch_id}</span></div>}
+          {complete && <div className="rounded-xl border border-border bg-card-muted p-3 text-sm"><p>После загрузки нужных источников запустите новый расчёт. Импорт сам по себе не создаёт рекомендации.</p>{onStartCalculation && <Button type="button" size="sm" className="mt-3" onClick={() => { setOpen(false); onStartCalculation(); }}>Запустить расчёт</Button>}</div>}
+          {complete && batch?.warnings.map((warning, index) => <div key={index} role="status" className="rounded-xl border border-border bg-card-muted p-3 text-xs text-muted-foreground">{warning.code === "missing_moq" ? `Пропущено ${warning.count} строк без значения MOQ. Проверьте исходный файл, если нужны условия поставки для этих товаров.` : `Импорт завершён с предупреждением: ${warning.code}.`}</div>)}
           {failed && <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">Обработка файла завершилась ошибкой. Проверьте структуру Excel и повторите загрузку.</div>}
           {validationErrors.length > 0 && <div className="rounded-xl border border-border bg-card-muted p-3 text-xs"><p className="font-semibold">Ошибки валидации</p><ul className="mt-2 list-disc space-y-1 pl-5">{validationErrors.slice(0, 8).map((issue, index) => <li key={index}>{getValidationMessage(issue)}</li>)}</ul>{validationErrors.length > 8 && <p className="mt-2 text-muted-foreground">И ещё {validationErrors.length - 8} ошибок.</p>}</div>}
           <div className="flex flex-wrap justify-end gap-2"><Button type="button" variant="ghost" onClick={clearForm} disabled={uploadInProgress}>Очистить</Button><Button type="submit" disabled={uploadInProgress || serverProcessing || complete}>{uploadInProgress ? "Загрузка…" : failed || mutation.isError ? "Повторить загрузку" : "Загрузить файл"}</Button></div>

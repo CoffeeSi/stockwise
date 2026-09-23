@@ -1,14 +1,19 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useForm } from "react-hook-form";
 import { Activity, BarChart3, Boxes, ClipboardList, FlaskConical, Search, Truck } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { apiHealthQueryOptions, databaseHealthQueryOptions } from "@/entities/system";
+import { useSessionUser } from "@/entities/user";
+import { LogoutButton } from "@/features/auth-session";
+import { ManageUsers } from "@/features/manage-users";
 import { ImportDataAction } from "@/features/import-data";
 import { CalculationRunBadge, RunCalculationAction } from "@/features/run-calculation";
-import { inventoryFilterSchema } from "@/features/filter-inventory";
+import { shellSearchSchema, type ShellSearch } from "../model/schema";
 import { useHorizonStore } from "@/features/set-horizon";
 import { ThemeToggle } from "@/features/toggle-theme";
 
@@ -20,21 +25,20 @@ const navigation = [
 ];
 
 export function AppShell({ children }: { children: ReactNode }) {
+  const user = useSessionUser();
+  const canWrite = user?.role === "buyer" || user?.role === "admin";
   const pathname = usePathname();
   const router = useRouter();
-  const [search, setSearch] = useState("");
+  const searchForm = useForm<ShellSearch>({ resolver: zodResolver(shellSearchSchema), defaultValues: { search: "" } });
   const days = useHorizonStore((state) => state.days);
   const setDays = useHorizonStore((state) => state.setDays);
+  const [runDialogRequest, setRunDialogRequest] = useState(0);
   const api = useQuery(apiHealthQueryOptions());
   const database = useQuery(databaseHealthQueryOptions());
   const apiStatus = api.isPending ? "Проверка API" : api.isSuccess ? "API доступен" : "API недоступен";
   const dbStatus = database.isPending ? "Проверка БД" : database.isSuccess ? "БД доступна" : "БД недоступна";
 
-  function submitSearch(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const result = inventoryFilterSchema.safeParse({ search, status: "all", supplier: "all", category: "all" });
-    if (result.success) router.push(result.data.search.trim() ? `/?q=${encodeURIComponent(result.data.search.trim())}` : "/");
-  }
+  const submitSearch = searchForm.handleSubmit(({ search }) => router.push(search ? `/?q=${encodeURIComponent(search)}` : "/"));
 
   return <div className="min-h-screen bg-background lg:flex">
     <aside className="hidden w-56 shrink-0 flex-col border-r border-border bg-card p-4 lg:flex">
@@ -45,8 +49,8 @@ export function AppShell({ children }: { children: ReactNode }) {
     <div className="min-w-0 flex-1">
       <header className="flex flex-wrap items-center gap-3 border-b border-border bg-card px-4 py-3 sm:px-7">
         <Link href="/" className="flex items-center gap-2 font-bold lg:hidden"><Boxes className="h-5 w-5" />StockWise</Link>
-        <form onSubmit={submitSearch} className="relative w-full sm:w-60"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><input aria-label="Поиск по номенклатуре и артикулу" value={search} onChange={(event) => setSearch(event.target.value)} maxLength={120} placeholder="Поиск SKU" className="h-10 w-full rounded-full border border-border bg-input pl-9 pr-3 text-xs outline-none focus:border-ring" /></form>
-        <div className="ml-auto flex flex-wrap items-center gap-2"><CalculationRunBadge /><ImportDataAction /><RunCalculationAction horizonDays={days} /><label htmlFor="horizon" className="sr-only">Горизонт расчёта</label><select id="horizon" value={days} onChange={(event) => setDays(Number(event.target.value))} className="h-10 rounded-full border border-border bg-input px-3 text-xs"><option value={30}>30 дней</option><option value={60}>60 дней</option><option value={90}>90 дней</option></select><ThemeToggle /></div>
+        <form onSubmit={submitSearch} className="relative w-full sm:w-60"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><input aria-label="Поиск по номенклатуре и артикулу" {...searchForm.register("search")} maxLength={200} placeholder="Поиск SKU" className="h-10 w-full rounded-full border border-border bg-input pl-9 pr-3 text-xs outline-none focus:border-ring" />{searchForm.formState.errors.search && <p role="alert" className="text-xs text-destructive">{searchForm.formState.errors.search.message}</p>}</form>
+        <div className="ml-auto flex flex-wrap items-center gap-2"><CalculationRunBadge />{canWrite && <><ImportDataAction onStartCalculation={() => setRunDialogRequest((value) => value + 1)} /><RunCalculationAction horizonDays={days} openRequest={runDialogRequest} /></>}<label htmlFor="horizon" className="sr-only">Горизонт расчёта</label><select id="horizon" value={days} onChange={(event) => setDays(Number(event.target.value))} className="h-10 rounded-full border border-border bg-input px-3 text-xs"><option value={30}>30 дней</option><option value={60}>60 дней</option><option value={90}>90 дней</option></select><ThemeToggle /><span className="text-xs text-muted-foreground">{user?.display_name} · {user?.role}</span><ManageUsers /><LogoutButton /></div>
         <div className="w-full text-right text-[11px] text-muted-foreground lg:hidden">{apiStatus} · {dbStatus}</div>
       </header>
       <nav aria-label="Разделы на мобильном" className="flex gap-1 overflow-x-auto border-b border-border bg-card px-3 py-2 lg:hidden">{navigation.map((entry) => <Link key={entry.href} href={entry.href} aria-current={pathname === entry.href ? "page" : undefined} className={`shrink-0 rounded-full px-3 py-2 text-xs ${pathname === entry.href ? "bg-accent font-semibold" : "text-muted-foreground"}`}>{entry.label}</Link>)}</nav>

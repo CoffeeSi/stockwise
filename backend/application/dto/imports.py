@@ -19,6 +19,7 @@ class ImportFileCommand:
 class ParsedImport:
     source_type: ImportSourceType
     rows: tuple[dict[str, Any], ...]
+    warnings: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

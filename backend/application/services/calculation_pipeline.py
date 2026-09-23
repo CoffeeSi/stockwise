@@ -5,9 +5,11 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
+from uuid import UUID
 
 from backend.application.ports.unit_of_work import UnitOfWork
 from backend.domain.entities.calculation_run import CalculationRun
+from backend.domain.entities.catalog import SupplierProduct
 from backend.domain.entities.demand_forecast import DemandForecast
 from backend.domain.entities.detected_anomaly import DetectedAnomaly
 from backend.domain.entities.recommendation import Recommendation
@@ -17,7 +19,12 @@ from backend.domain.services.demand_preparation import prepare_demand
 from backend.domain.services.forecasting import calculate_demand_forecast
 from backend.domain.services.recommendation import build_recommendation
 from backend.domain.services.risk import RiskPolicy
+from backend.domain.services.budget import allocate_budget
 from backend.domain.value_objects.demand import DemandConfig, DemandGroup, DemandSource
+
+
+class MissingSupplierTermsError(ValueError):
+    code = "supplier_terms_missing"
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +40,31 @@ def _month_start(index: int) -> date:
 
 def _midnight(value: date) -> datetime:
     return datetime.combine(value, time.min, tzinfo=timezone.utc)
+
+
+def _saved_terms(run: CalculationRun, uow: UnitOfWork, product_id: UUID):
+    saved = run.parameters.get("supplier_terms_snapshot")
+    if saved is None:
+        return uow.suppliers.list_terms(product_id)
+    return [SupplierProduct(
+        id=UUID(item["id"]), supplier_id=UUID(item["supplier_id"]), product_id=UUID(item["product_id"]),
+        moq=Decimal(item["moq"]), package_size=Decimal(item["package_size"]),
+        lead_time_days=item["lead_time_days"],
+        purchase_price=Decimal(item["purchase_price"]) if item["purchase_price"] is not None else None,
+        currency=item["currency"], priority=item["priority"],
+        is_primary=item["is_primary"], is_active=item["is_active"],
+    ) for item in saved.get(str(product_id), [])]
+
+
+def _monthly_stock(snapshots, start: date, end: date) -> str | None:
+    rows = [item for item in snapshots if start <= item.snapshot_at.date() <= end]
+    if not rows:
+        return None
+    latest = max(item.snapshot_at for item in rows)
+    observations = {item.quantity_available for item in rows if item.snapshot_at == latest}
+    if len(observations) != 1:
+        raise AmbiguousSourceDataError("Conflicting monthly stock observations")
+    return str(observations.pop())
 
 
 def _growth_override(uow: UnitOfWork, product, warehouse_id, on_date, batch_ids):
@@ -73,6 +105,13 @@ class CalculationPipeline:
             "history_periods": 12,
             "forecast_period_days": 30,
             "safety_stock_days": 7,
+            "analytics_policy": {
+                "version": "demand-quantity-abc-xyz/v1",
+                "abc_method": "descending_cleaned_quantity_cumulative_share",
+                "abc_a_share": "0.80", "abc_b_share": "0.95",
+                "xyz_method": "population_coefficient_of_variation",
+                "xyz_x_cv": "0.10", "xyz_y_cv": "0.25",
+            },
         }
 
     def calculate(self, run: CalculationRun, uow: UnitOfWork) -> CalculationResults:
@@ -92,7 +131,7 @@ class CalculationPipeline:
         recommendations: list[Recommendation] = []
 
         for product in products:
-            terms = sorted(uow.suppliers.list_terms(product.id), key=lambda item: (
+            terms = sorted(_saved_terms(run, uow, product.id), key=lambda item: (
                 not item.is_primary, item.priority, item.lead_time_days,
                 item.purchase_price if item.purchase_price is not None else Decimal("Infinity"),
                 str(item.supplier_id),
@@ -145,7 +184,7 @@ class CalculationPipeline:
                 if not any(period.observed or period.stockout_adjustment > 0 for period in prepared.periods) and material <= 0:
                     continue
                 if not terms:
-                    raise ValueError(f"active supplier terms missing for product {product.id}")
+                    raise MissingSupplierTermsError(f"active supplier terms missing for product {product.id}")
                 history_days = sum((period.period_end - period.period_start).days + 1
                                    for period in prepared.periods)
                 scale = Decimal("30") / Decimal(history_days)
@@ -187,6 +226,7 @@ class CalculationPipeline:
                              "raw_demand": str(item.raw_demand),
                              "cleaned_demand": str(item.cleaned_demand),
                              "stockout_adjustment": str(item.stockout_adjustment),
+                             "stock": _monthly_stock(snapshots, item.period_start, item.period_end),
                              "observed": item.observed}
                             for item in prepared.periods
                         ],
@@ -223,7 +263,31 @@ class CalculationPipeline:
                         "selected_supplier_id": str(terms[0].supplier_id),
                         "candidate_count": len(terms),
                     },
+                    "supplier_terms_snapshot": {
+                        "supplier_product_id": str(terms[0].id),
+                        "unit_price": str(terms[0].purchase_price) if terms[0].purchase_price is not None else None,
+                        "currency": terms[0].currency,
+                        "moq": str(terms[0].moq),
+                        "package_size": str(terms[0].package_size),
+                        "lead_time_days": terms[0].lead_time_days,
+                    },
                     "risk_policy": self.configuration()["risk_policy"],
                 }
                 recommendations.append(recommendation)
+        budget_value = run.parameters.get("budget_limit")
+        if budget_value is not None:
+            allocation = allocate_budget(recommendations, Decimal(str(budget_value)), run.parameters.get("currency"))
+            run.parameters = {**run.parameters, "currency": allocation.currency,
+                              "allocated_amount": str(allocation.allocated_amount),
+                              "unmet_need_amount": str(allocation.unmet_need_amount),
+                              "optimization_method": allocation.method}
+            for row in recommendations:
+                unconstrained = row.recommended_quantity
+                row.recommended_quantity = allocation.quantities[row.id]
+                row.effective_quantity = allocation.quantities[row.id]
+                row.calculation_details = {**row.calculation_details, "budget_allocation": {
+                    "method": allocation.method, "unconstrained_quantity": str(unconstrained),
+                    "allocated_quantity": str(row.recommended_quantity),
+                }}
+                row.explanation += f" Budget allocation ({allocation.method}): {row.recommended_quantity} of {unconstrained}."
         return CalculationResults(anomalies, forecasts, recommendations)

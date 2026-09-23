@@ -79,7 +79,10 @@ class SqlAlchemyImportRepository:
         self._session.flush()
         return self._to_domain(model)
 
-    def mark_completed(self, batch_id: UUID, *, row_count: int) -> ImportBatch:
+    def mark_completed(
+        self, batch_id: UUID, *, row_count: int,
+        warnings: tuple[dict[str, Any], ...] = (),
+    ) -> ImportBatch:
         if row_count < 0:
             raise ValueError("row_count must be nonnegative")
         model = self._require(batch_id)
@@ -99,7 +102,7 @@ class SqlAlchemyImportRepository:
 
         model.status = ImportStatus.COMPLETED
         model.row_count = row_count
-        model.error_details = None
+        model.error_details = {"warnings": list(warnings)} if warnings else None
         try:
             self._session.flush()
         except IntegrityError:

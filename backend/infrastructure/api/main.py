@@ -8,6 +8,11 @@ from fastapi.responses import JSONResponse
 
 from backend.infrastructure.config.settings import CorsSettings, Settings
 from backend.infrastructure.api.routers.ai import router as ai_router
+from backend.infrastructure.api.routers.auth import router as auth_router
+from backend.infrastructure.api.routers.catalogs import router as catalogs_router
+from backend.infrastructure.api.routers.order_workflow import router as order_workflow_router
+from backend.infrastructure.api.routers.analytics import router as analytics_router
+from backend.infrastructure.api.routers.scenarios import router as scenarios_router
 from backend.infrastructure.api.routers.health import router as health_router
 from backend.infrastructure.api.routers.imports import router as imports_router
 from backend.infrastructure.api.routers.orders import router as orders_router
@@ -18,6 +23,7 @@ from backend.infrastructure.api.routers.recommendations import router as recomme
 from backend.infrastructure.api.errors import install_error_handlers
 from backend.infrastructure.excel.artifact_store import FileExportArtifactStore
 from backend.infrastructure.persistence.database import Database
+from backend.infrastructure.background_worker import BackgroundWorker
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -28,11 +34,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         config = settings if settings is not None else Settings()
         app.state.settings = config
         database = Database(config.database_url, echo=config.db_echo)
+        worker = BackgroundWorker(database, config.import_spool_directory, config)
         try:
             app.state.database = database
             app.state.export_artifacts = FileExportArtifactStore(config.order_export_directory)
+            app.state.background_worker = worker
+            worker.start()
             yield
         finally:
+            worker.stop()
             database.dispose()
 
     app = FastAPI(title="Warehouse replenishment", lifespan=lifespan)
@@ -115,8 +125,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     app.include_router(health_router)
+    app.include_router(auth_router)
     app.include_router(ai_router)
     app.include_router(imports_router)
+    app.include_router(catalogs_router)
+    app.include_router(analytics_router)
+    app.include_router(scenarios_router)
+    app.include_router(order_workflow_router)
     app.include_router(calculation_runs_router)
     app.include_router(recommendations_router)
     app.include_router(orders_router)
