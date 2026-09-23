@@ -5,13 +5,9 @@ import logging
 from typing import Any
 
 from openai import AsyncOpenAI
+from fastapi import HTTPException
 
 from backend.infrastructure.ai.cache import AiMemoryCache
-from backend.infrastructure.ai.fallbacks import (
-    generate_sku_analysis_fallback,
-    generate_supplier_letter_fallback,
-    generate_supplier_summary_fallback,
-)
 from backend.infrastructure.ai.schemas import (
     SkuAnalysisRequest,
     SkuAnalysisResponse,
@@ -26,7 +22,7 @@ logger = logging.getLogger("procurement.ai")
 
 
 class AiProcurementService:
-    """Service orchestrating OpenAI GPT-4o-mini with Structured Outputs, caching, and graceful fallback."""
+    """Service orchestrating OpenAI GPT-4o-mini with Structured Outputs."""
 
     def __init__(
         self,
@@ -44,7 +40,11 @@ class AiProcurementService:
             self.client: AsyncOpenAI | None = AsyncOpenAI(api_key=api_key.strip())
         else:
             self.client = None
-            logger.info("OpenAI API key not configured or dummy; using deterministic fallbacks.")
+            logger.info("OpenAI API key not configured; AI endpoints are unavailable.")
+
+    @staticmethod
+    def _unavailable() -> HTTPException:
+        return HTTPException(status_code=503, detail={"code": "ai_provider_unavailable", "message": "AI service unavailable"})
 
     async def analyze_sku(self, req: SkuAnalysisRequest) -> SkuAnalysisResponse:
         """Generate SKU explainability report for purchaser drawer."""
@@ -54,9 +54,7 @@ class AiProcurementService:
             return cached
 
         if self.client is None:
-            result = generate_sku_analysis_fallback(req)
-            self.cache.set(cache_key, result)
-            return result
+            raise self._unavailable()
 
         prompt = (
             "Ты — ведущий эксперт по закупкам ТОО «Электрокомплект». Проанализируй товарную позицию "
@@ -104,11 +102,9 @@ class AiProcurementService:
                 self.cache.set(cache_key, choice)
                 return choice
         except Exception as exc:
-            logger.warning("OpenAI SKU analysis failed, using fallback: %s", exc)
-
-        fallback = generate_sku_analysis_fallback(req)
-        self.cache.set(cache_key, fallback)
-        return fallback
+            logger.warning("OpenAI SKU analysis failed: %s", exc)
+            raise self._unavailable() from exc
+        raise self._unavailable()
 
     async def generate_supplier_summary(self, req: SupplierSummaryRequest) -> SupplierSummaryResponse:
         """Generate executive procurement summary for dashboard bento card."""
@@ -118,9 +114,7 @@ class AiProcurementService:
             return cached
 
         if self.client is None:
-            result = generate_supplier_summary_fallback(req)
-            self.cache.set(cache_key, result)
-            return result
+            raise self._unavailable()
 
         crit_preview = "\n".join(
             f"- {it.get('sku')}: {it.get('item_name')} — остаток на {it.get('days_of_stock', 0)} дн., потребность {it.get('calculated_need', 0)}"
@@ -164,11 +158,9 @@ class AiProcurementService:
                 self.cache.set(cache_key, choice)
                 return choice
         except Exception as exc:
-            logger.warning("OpenAI Supplier summary failed, using fallback: %s", exc)
-
-        fallback = generate_supplier_summary_fallback(req)
-        self.cache.set(cache_key, fallback)
-        return fallback
+            logger.warning("OpenAI supplier summary failed: %s", exc)
+            raise self._unavailable() from exc
+        raise self._unavailable()
 
     async def generate_supplier_letter(self, req: SupplierLetterRequest) -> SupplierLetterResponse:
         """Generate official reservation letter to supplier (IEK)."""
@@ -178,9 +170,7 @@ class AiProcurementService:
             return cached
 
         if self.client is None:
-            result = generate_supplier_letter_fallback(req)
-            self.cache.set(cache_key, result)
-            return result
+            raise self._unavailable()
 
         items_preview = "\n".join(
             f"- {it.get('sku')} | {it.get('item_name')} | {it.get('quantity')} {it.get('unit', 'шт')} | {it.get('total_cost', 0):,.0f} ₸"
@@ -191,8 +181,8 @@ class AiProcurementService:
             f"Составь официальное деловое письмо-заявку на резервирование и поставку продукции.\n\n"
             f"Заказчик: {req.company_name}\n"
             f"Поставщик: {req.supplier_name}\n"
-            f"Желаемый срок поставки: {req.target_date or 'до 05.10.2026'}\n"
-            f"Условия отгрузки: {req.delivery_notes or 'самовывоз с регионального склада'}\n\n"
+            f"Желаемый срок поставки: {req.target_date or 'не указан'}\n"
+            f"Условия отгрузки: {req.delivery_notes or 'не указаны'}\n\n"
             f"Спецификация позиций:\n{items_preview}\n\n"
             "Сформируй корректную тему письма, официального адресата, вежливое приветствие, "
             "деловое тело письма со ссылкой на партнерские отношения и договор, "
@@ -223,11 +213,9 @@ class AiProcurementService:
                 self.cache.set(cache_key, choice)
                 return choice
         except Exception as exc:
-            logger.warning("OpenAI Supplier letter failed, using fallback: %s", exc)
-
-        fallback = generate_supplier_letter_fallback(req)
-        self.cache.set(cache_key, fallback)
-        return fallback
+            logger.warning("OpenAI supplier letter failed: %s", exc)
+            raise self._unavailable() from exc
+        raise self._unavailable()
 
 
 _ai_service_instance: AiProcurementService | None = None

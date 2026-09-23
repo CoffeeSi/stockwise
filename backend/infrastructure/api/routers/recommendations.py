@@ -13,7 +13,7 @@ from backend.infrastructure.api.schemas.workflows import (
 )
 
 router = APIRouter(prefix="/api/recommendations", tags=["recommendations"],
-                   dependencies=[Depends(deps.get_current_user)], responses=ERROR_RESPONSES)
+                   dependencies=[Depends(deps.get_audit_actor)], responses=ERROR_RESPONSES)
 
 
 @router.get("/{recommendation_id}/explain", response_model=ExplanationResponse)
@@ -23,7 +23,7 @@ def explain(recommendation_id: UUID, use_case: ExplainRecommendation = Depends(d
 
 @router.patch("/{recommendation_id}", response_model=RecommendationResponse)
 def adjust(recommendation_id: UUID, body: AdjustRecommendationRequest,
-           user: User = Depends(deps.require_writer),
+           user: User = Depends(deps.get_audit_actor),
            use_case: AdjustRecommendation = Depends(deps.get_adjust_recommendation)):
     result = invoke(use_case.execute, recommendation_id, expected_version=body.version,
                     new_quantity=body.new_quantity, reason=body.reason, user_id=user.id)
@@ -32,7 +32,7 @@ def adjust(recommendation_id: UUID, body: AdjustRecommendationRequest,
 
 @router.post("/{recommendation_id}/accept", response_model=RecommendationResponse)
 def accept(recommendation_id: UUID, body: AcceptRecommendationRequest,
-           _user: User = Depends(deps.require_writer),
+           _user: User = Depends(deps.get_audit_actor),
            use_case: AcceptRecommendation = Depends(deps.get_accept_recommendation)):
     result = invoke(use_case.execute, recommendation_id, expected_version=body.version)
     return RecommendationResponse.model_validate(result)

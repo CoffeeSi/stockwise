@@ -62,7 +62,7 @@ function errorFromBody(status: number, raw: unknown): ApiError {
   const code = typeof detail === "object" && detail !== null ? detail.code : undefined;
   const serverMessage = typeof detail === "string" ? detail : detail?.message;
   const message = status === 401
-    ? "Сессия завершена. Войдите снова."
+    ? "Сервер отклонил запрос (401)."
     : status === 403
     ? "Недостаточно прав для этой операции."
     : status === 404
@@ -137,7 +137,6 @@ async function withResponse<T>(
       signal: controller.signal,
       cache: "no-store",
     });
-    if (response.status === 401 && typeof window !== "undefined") window.dispatchEvent(new Event("stockwise:unauthorized"));
     return await read(response);
   } catch (error) {
     if (error instanceof ApiError) throw error;
@@ -223,7 +222,6 @@ export function apiUpload<T>(
     request.addEventListener("abort", () => reject(new ApiError(0, "Загрузка файла отменена.", { code: "request_aborted" })));
     request.addEventListener("load", () => {
       try {
-        if (request.status === 401 && typeof window !== "undefined") window.dispatchEvent(new Event("stockwise:unauthorized"));
         if (request.status < 200 || request.status >= 300) {
           let body: unknown;
           try {

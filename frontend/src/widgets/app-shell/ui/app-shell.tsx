@@ -7,8 +7,6 @@ import { usePathname, useRouter } from "next/navigation";
 import { useState, type FormEvent, type ReactNode } from "react";
 import { apiHealthQueryOptions, databaseHealthQueryOptions } from "@/entities/system";
 import { ImportDataAction } from "@/features/import-data";
-import { LogoutButton } from "@/features/auth-session";
-import { useSessionUser } from "@/entities/user";
 import { CalculationRunBadge, RunCalculationAction } from "@/features/run-calculation";
 import { inventoryFilterSchema } from "@/features/filter-inventory";
 import { useHorizonStore } from "@/features/set-horizon";
@@ -22,7 +20,6 @@ const navigation = [
 ];
 
 export function AppShell({ children }: { children: ReactNode }) {
-  const user = useSessionUser();
   const pathname = usePathname();
   const router = useRouter();
   const [search, setSearch] = useState("");
@@ -49,7 +46,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <header className="flex flex-wrap items-center gap-3 border-b border-border bg-card px-4 py-3 sm:px-7">
         <Link href="/" className="flex items-center gap-2 font-bold lg:hidden"><Boxes className="h-5 w-5" />StockWise</Link>
         <form onSubmit={submitSearch} className="relative w-full sm:w-60"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><input aria-label="Поиск по номенклатуре и артикулу" value={search} onChange={(event) => setSearch(event.target.value)} maxLength={120} placeholder="Поиск SKU" className="h-10 w-full rounded-full border border-border bg-input pl-9 pr-3 text-xs outline-none focus:border-ring" /></form>
-        <div className="ml-auto flex flex-wrap items-center gap-2"><span className="text-xs text-muted-foreground">{user?.display_name} · {user?.role === "admin" ? "Администратор" : "Закупщик"}</span><CalculationRunBadge />{user?.role === "buyer" && <><ImportDataAction /><RunCalculationAction horizonDays={days} /><label htmlFor="horizon" className="sr-only">Горизонт расчёта</label><select id="horizon" value={days} onChange={(event) => setDays(Number(event.target.value))} className="h-10 rounded-full border border-border bg-input px-3 text-xs"><option value={30}>30 дней</option><option value={60}>60 дней</option><option value={90}>90 дней</option></select></>}<ThemeToggle /><LogoutButton /></div>
+        <div className="ml-auto flex flex-wrap items-center gap-2"><CalculationRunBadge /><ImportDataAction /><RunCalculationAction horizonDays={days} /><label htmlFor="horizon" className="sr-only">Горизонт расчёта</label><select id="horizon" value={days} onChange={(event) => setDays(Number(event.target.value))} className="h-10 rounded-full border border-border bg-input px-3 text-xs"><option value={30}>30 дней</option><option value={60}>60 дней</option><option value={90}>90 дней</option></select><ThemeToggle /></div>
         <div className="w-full text-right text-[11px] text-muted-foreground lg:hidden">{apiStatus} · {dbStatus}</div>
       </header>
       <nav aria-label="Разделы на мобильном" className="flex gap-1 overflow-x-auto border-b border-border bg-card px-3 py-2 lg:hidden">{navigation.map((entry) => <Link key={entry.href} href={entry.href} aria-current={pathname === entry.href ? "page" : undefined} className={`shrink-0 rounded-full px-3 py-2 text-xs ${pathname === entry.href ? "bg-accent font-semibold" : "text-muted-foreground"}`}>{entry.label}</Link>)}</nav>

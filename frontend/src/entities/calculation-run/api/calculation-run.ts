@@ -1,7 +1,9 @@
 import { queryOptions } from "@tanstack/react-query";
+import { z } from "zod";
 import { apiRequest } from "@/shared/api";
 import {
   calculationRunSchema,
+  demandTrendPointSchema,
   createCalculationRunInputSchema,
   runRecommendationFiltersSchema,
   runRecommendationsPageSchema,
@@ -14,7 +16,16 @@ export const calculationRunKeys = {
   detail: (id: string) => [...calculationRunKeys.all, id] as const,
   recommendations: (id: string, filters: RunRecommendationFilters = {}) =>
     [...calculationRunKeys.detail(id), "recommendations", filters] as const,
+  trends: (id: string) => [...calculationRunKeys.detail(id), "demand-trends"] as const,
 };
+
+export function demandTrendsQueryOptions(id: string) {
+  return queryOptions({
+    queryKey: calculationRunKeys.trends(id),
+    queryFn: () => apiRequest(`/api/calculation-runs/${encodeURIComponent(id)}/demand-trends`, z.array(demandTrendPointSchema)),
+    retry: false,
+  });
+}
 
 export function calculationRunQueryOptions(id: string) {
   return queryOptions({

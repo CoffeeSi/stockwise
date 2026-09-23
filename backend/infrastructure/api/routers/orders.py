@@ -15,11 +15,11 @@ from backend.infrastructure.api.schemas.workflows import CreateOrdersRequest, Ex
 
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 router = APIRouter(prefix="/api/orders", tags=["orders"],
-                   dependencies=[Depends(deps.get_current_user)], responses=ERROR_RESPONSES)
+                   dependencies=[Depends(deps.get_audit_actor)], responses=ERROR_RESPONSES)
 
 
 @router.post("", response_model=list[OrderResponse], status_code=201)
-def create_orders(body: CreateOrdersRequest, user: User = Depends(deps.require_writer),
+def create_orders(body: CreateOrdersRequest, user: User = Depends(deps.get_audit_actor),
                   use_case: CreateOrders = Depends(deps.get_create_orders),
                   get_run: GetCalculationRun = Depends(deps.get_calculation_run)):
     require_result(invoke(get_run.execute, body.calculation_run_id))
@@ -33,13 +33,13 @@ def get_order(order_id: UUID, use_case: GetOrder = Depends(deps.get_order)):
 
 @router.post("/{order_id}/approve", response_model=OrderResponse)
 def approve_order(order_id: UUID, body: RequestModel | None = Body(default=None),
-                  user: User = Depends(deps.require_admin), use_case: ApproveOrder = Depends(deps.get_approve_order)):
+                  user: User = Depends(deps.get_audit_actor), use_case: ApproveOrder = Depends(deps.get_approve_order)):
     return OrderResponse.model_validate(invoke(use_case.execute, order_id, user_id=user.id))
 
 
 @router.post("/{order_id}/export", response_model=ExportResponse, status_code=201)
 def create_export(order_id: UUID, body: RequestModel | None = Body(default=None),
-                  user: User = Depends(deps.require_writer), use_case: ExportOrder = Depends(deps.get_export_order)):
+                  user: User = Depends(deps.get_audit_actor), use_case: ExportOrder = Depends(deps.get_export_order)):
     result = invoke(use_case.execute, order_id, user_id=user.id)
     return ExportResponse.model_validate(result.metadata)
 
